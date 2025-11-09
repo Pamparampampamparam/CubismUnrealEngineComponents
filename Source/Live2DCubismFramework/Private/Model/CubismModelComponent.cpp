@@ -7,7 +7,6 @@
 
 
 #include "Model/CubismModelComponent.h"
-
 #include "Model/CubismMoc3.h"
 #include "Model/CubismDrawableComponent.h"
 #include "Model/CubismParameterComponent.h"
@@ -28,10 +27,11 @@ UCubismModelComponent::UCubismModelComponent()
 	PrimaryComponentTick.TickGroup = TG_DuringPhysics;
 	bTickInEditor = true;
 }
-
 UCubismModelComponent::~UCubismModelComponent()
 {
 }
+
+
 
 void UCubismModelComponent::Setup()
 {

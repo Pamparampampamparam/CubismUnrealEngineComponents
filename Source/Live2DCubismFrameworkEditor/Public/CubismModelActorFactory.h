@@ -42,6 +42,7 @@ protected:
 	static TObjectPtr<UCubismPose3Json> LoadPose3Json(const TObjectPtr<UCubismModel3Json>& Model3Json);
 	static TArray<TObjectPtr<UCubismExp3Json>> LoadExp3Jsons(const TObjectPtr<UCubismModel3Json>& Model3Json);
 	static TArray<FMotion3JsonGroup> LoadMotion3Jsons(const TObjectPtr<UCubismModel3Json>& Model3Json);
+	static TObjectPtr<UCubismDisplayInfo3Json> LoadDisplayInfo3Json(const TObjectPtr<UCubismModel3Json>& Model3Json);
 	static TObjectPtr<UCubismUserData3Json> LoadUserData3Json(const TObjectPtr<UCubismModel3Json>& Model3Json);
 
 public:

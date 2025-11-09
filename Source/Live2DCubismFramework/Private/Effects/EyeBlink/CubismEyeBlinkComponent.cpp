@@ -54,12 +54,21 @@ void UCubismEyeBlinkComponent::Setup(UCubismModelComponent* InModel)
 
 TObjectPtr<UCubismModelComponent> UCubismEyeBlinkComponent::GetModel() 
 {
-	if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
+	/*if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
 	{
 		return ModelComp;
 	}
 
 	return nullptr;
+	*/
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return nullptr;
+	}
+
+	return Owner->FindComponentByClass<UCubismModelComponent>();
+
 }
 
 // UObject interface
@@ -142,6 +151,25 @@ void UCubismEyeBlinkComponent::OnComponentCreated()
 void UCubismEyeBlinkComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	// --- BEGIN FIX ---
+	// Lazy initialization: If the ModelComponent isn't set (due to initialization order issues),
+	// try to find it now. By the time TickComponent runs, all components should be available.
+	if (!Model)
+	{
+		const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
+		if (ModelComp)
+		{
+			// If found, run the setup logic.
+			Setup(ModelComp);
+		}
+		else
+		{
+			// Model is not found. Skip ticking to prevent a crash.
+			return;
+		}
+	}
+	// --- END FIX ---
 
 	Update(DeltaTime);
 

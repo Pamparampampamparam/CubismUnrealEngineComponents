@@ -226,12 +226,21 @@ bool UCubismRaycastComponent::RayIntersectTriangle
 
 TObjectPtr<UCubismModelComponent> UCubismRaycastComponent::GetModel() 
 {
-	if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
+	/*if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
 	{
 		return ModelComp;
 	}
 
-	return nullptr;
+	return nullptr; */
+
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return nullptr;
+	}
+
+	return Owner->FindComponentByClass<UCubismModelComponent>();
+
 }
 
 // UObject interface
