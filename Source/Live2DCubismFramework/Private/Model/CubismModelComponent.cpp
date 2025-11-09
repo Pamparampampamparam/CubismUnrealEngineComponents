@@ -31,6 +31,13 @@ UCubismModelComponent::~UCubismModelComponent()
 {
 }
 
+void UCubismModelComponent::BeginPlay()
+{
+	Super::BeginPlay();
+
+	// Run setup for actors placed in the level.
+	ComponentSetup();
+}
 
 
 void UCubismModelComponent::Setup()
@@ -656,6 +663,13 @@ void UCubismModelComponent::OnComponentCreated()
 
 void UCubismModelComponent::ComponentSetup()
 {
+	// Add this guard at the top of the function
+	if (bHasRunComponentSetup)
+	{
+		return;
+	}
+	bHasRunComponentSetup = true;
+	
 	//Setting up the Store Component
 	if (!ParameterStore)
 	{
@@ -685,25 +699,29 @@ void UCubismModelComponent::ComponentSetup()
 
 
 	//Setting up the motion component
+		// --- BEGIN FIX ---
+		// 1. Ensure the Motion component exists.
 	if (!Motion)
 	{
 		Motion = NewObject<UCubismMotionComponent>(this, UCubismMotionComponent::StaticClass());
-
-		if (MotionJsons.Num() > 0)
-		{
-			Motion->Jsons = MotionJsons;
-		}
-
 		Motion->RegisterComponent();
+	}
 
-		if (MotionJsons.Num() > 0)
+	// 2. Always ensure the Jsons are assigned.
+	if (MotionJsons.Num() > 0)
+	{
+		Motion->Jsons = MotionJsons;
+	}
+
+	// 3. Always attempt to play the default motion.
+	if (MotionJsons.Num() > 0)
+	{
+		if (MotionJsons[0])
 		{
-			if (MotionJsons[0])
-			{
-				Motion->PlayMotion(0, 0.0f, ECubismMotionPriority::Idle);
-			}
+			Motion->PlayMotion(0, 0.0f, ECubismMotionPriority::Idle);
 		}
 	}
+	// --- END FIX ---
 
 	//Setting up the expression component
 	if (!Expression)
@@ -771,6 +789,8 @@ void UCubismModelComponent::ComponentCleanup()
 	ParameterIndices.Empty();
 	PartIndices.Empty();
 	NonNativeParameterIds.Empty();
+
+	bHasRunComponentSetup = false;
 }
 
 void UCubismModelComponent::OnComponentDestroyed(bool bDestroyingHierarchy)

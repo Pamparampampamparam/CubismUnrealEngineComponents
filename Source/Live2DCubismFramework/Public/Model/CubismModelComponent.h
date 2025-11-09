@@ -726,6 +726,10 @@ private:
 	 */
 	csmModel* RawModel;
 
+private:
+	/** Flag to ensure ComponentSetup() logic only runs once. */
+	bool bHasRunComponentSetup = false;
+
 public:
 	// UObject interface
 	virtual void PostLoad() override;
@@ -736,6 +740,7 @@ public:
 	// End of UObject interface
 
 	// UActorComponent interface
+	virtual void BeginPlay() override;
 	virtual void OnComponentCreated() override;
 	virtual void OnComponentDestroyed(bool bDestroyingHierarchy) override;
 
