@@ -90,6 +90,33 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	UAudioComponent* GetAudioComponent();
 
+	/**
+	 * @brief Assigns a new sound to drive the lip sync at runtime.
+	 * @param InSource The sound wave (a procedural sound wave works as well).
+	 * @param bPlayImmediately Whether to start playing the sound right away.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	void SetSource(USoundWave* InSource, const bool bPlayImmediately = true);
+
+	/**
+	 * @brief Starts (or restarts) playing the current source; the mouth follows its envelope.
+	 * @param StartTime The time in seconds to start the sound at.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	void Play(const float StartTime = 0.0f);
+
+	/**
+	 * @brief Stops the sound; the mouth closes smoothly.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	void Stop();
+
+	/**
+	 * @brief Whether the source sound is currently playing.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	bool IsPlaying() const;
+
 	// ICubismUpdatableInterface
 	virtual bool IsControlledByUpdateController() const override { return true; }
 	virtual int32 GetExecutionOrder() const override;
@@ -170,6 +197,9 @@ private:
 	 */
 	UFUNCTION()
 	void OnEnvelopeValue(const USoundWave* InSoundWave, const float InEnvelopeValue);
+
+	UFUNCTION()
+	void OnAudioFinished();
 
 	float LipSyncTargetValue;
 	float LipSyncValue;

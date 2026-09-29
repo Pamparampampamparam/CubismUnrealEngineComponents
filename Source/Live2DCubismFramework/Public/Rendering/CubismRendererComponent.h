@@ -99,6 +99,13 @@ public:
 	void ApplyRenderOrder();
 
 	/**
+	 * @brief Sets the render order of the whole model and applies it to the drawables.
+	 * Give each model on screen its own range (e.g. 0, 1000, 2000, ...) so that overlapping models do not interleave.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	void SetRenderOrder(const int32 InRenderOrder);
+
+	/**
 	 * @brief The function to calculate the render order of the drawable.
 	 * @param Drawable The drawable to calculate the render order for.
 	 * @return The render order of the drawable.

@@ -11,6 +11,8 @@
 #include "CubismSourcePathUtils.h"
 #include "CubismLog.h"
 #include "Misc/Paths.h"
+#include "Misc/PackageName.h"
+#include "UObject/Package.h"
 
 void UCubismModel3Json::PostInitProperties()
 {
@@ -21,6 +23,80 @@ void UCubismModel3Json::PostInitProperties()
 	}
 #endif
 	Super::PostInitProperties();
+}
+
+FString UCubismModel3Json::ResolveAssetPath(const FString& RelativePath) const
+{
+	if (RelativePath.IsEmpty())
+	{
+		return FString();
+	}
+
+	const FString LongPackagePath = FPackageName::GetLongPackagePath(GetOutermost()->GetPathName());
+
+	FString DirectoryPath, FileNameWithoutExt, Ext;
+	FPaths::Split(LongPackagePath / RelativePath, DirectoryPath, FileNameWithoutExt, Ext);
+
+	DirectoryPath = FPaths::ConvertRelativePathToFull(DirectoryPath);
+	DirectoryPath = FPackageName::FilenameToLongPackageName(DirectoryPath);
+
+	FileNameWithoutExt = FileNameWithoutExt.Replace(TEXT(" "), TEXT("_")).Replace(TEXT("."), TEXT("_"));
+
+	return FString::Printf(TEXT("%s/%s.%s"), *DirectoryPath, *FileNameWithoutExt, *FileNameWithoutExt);
+}
+
+void UCubismModel3Json::CollectReferencedAssets()
+{
+	TArray<FString> RelativePaths;
+
+	RelativePaths.Add(MocPath);
+	RelativePaths.Append(TexturePaths);
+	RelativePaths.Add(PhysicsPath);
+	RelativePaths.Add(PosePath);
+	RelativePaths.Add(DisplayInfoPath);
+	RelativePaths.Add(UserDataPath);
+
+	for (const FExpressionEntry& Entry : Expressions)
+	{
+		RelativePaths.Add(Entry.Path);
+	}
+
+	for (const FMotionGroupEntry& Group : Motions)
+	{
+		RelativePaths.Append(Group.Paths);
+	}
+
+	TArray<TObjectPtr<UObject>> NewReferences;
+
+	for (const FString& RelativePath : RelativePaths)
+	{
+		if (RelativePath.IsEmpty())
+		{
+			continue;
+		}
+
+		const FString AssetPath = ResolveAssetPath(RelativePath);
+
+		UObject* Asset = LoadObject<UObject>(nullptr, *AssetPath);
+
+		if (!Asset)
+		{
+			UE_LOG(LogCubism, Warning, TEXT("UCubismModel3Json::CollectReferencedAssets: '%s' referenced by '%s' was not found."), *AssetPath, *GetName());
+
+			continue;
+		}
+
+		NewReferences.AddUnique(Asset);
+	}
+
+	if (NewReferences != ReferencedAssets)
+	{
+		ReferencedAssets = MoveTemp(NewReferences);
+
+#if WITH_EDITOR
+		MarkPackageDirty();
+#endif
+	}
 }
 
 void UCubismModel3Json::PostLoad()

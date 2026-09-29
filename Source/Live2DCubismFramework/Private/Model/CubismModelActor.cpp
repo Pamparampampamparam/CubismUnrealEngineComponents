@@ -40,6 +40,14 @@ void ACubismModel::Initialize(UCubismModel3Json* Model3Json)
 		return;
 	}
 
+#if WITH_EDITOR
+	// Placed in the editor: record hard references so that the cooker packages every asset the model needs at runtime.
+	if (GIsEditor && GetWorld() && !GetWorld()->IsGameWorld())
+	{
+		Model3Json->CollectReferencedAssets();
+	}
+#endif
+
 	// Model Component
 	if (!IsValid(Model))
 	{
@@ -98,52 +106,64 @@ void ACubismModel::Initialize(UCubismModel3Json* Model3Json)
 	}
 
 	// setup eye blink if exists
-	if (Model3Json->EyeBlinks.Num() > 0 && !IsValid(Model->EyeBlink))
+	if (Model3Json->EyeBlinks.Num() > 0)
 	{
-		UCubismEyeBlinkComponent* EyeBlink = NewObject<UCubismEyeBlinkComponent>(Model, TEXT("CubismEyeBlink"), RF_Transactional);
+		if (IsValid(Model->EyeBlink))
+		{
+			// Re-initialised with another model asset: refresh the ids of the existing component.
+			Model->EyeBlink->Json = Model3Json;
+			Model->EyeBlink->Setup(Model);
+		}
+		else
+		{
+			UCubismEyeBlinkComponent* EyeBlink = NewObject<UCubismEyeBlinkComponent>(Model, TEXT("CubismEyeBlink"), RF_Transactional);
 
-		EyeBlink->Json = Model3Json;
+			EyeBlink->Json = Model3Json;
 
-		EyeBlink->RegisterComponent();
-		AddInstanceComponent(EyeBlink);
+			EyeBlink->RegisterComponent();
+			AddInstanceComponent(EyeBlink);
+		}
 	}
 
 	// setup lip sync if exists
-	if (Model3Json->LipSyncs.Num() > 0 && !IsValid(Model->LipSync))
+	if (Model3Json->LipSyncs.Num() > 0)
 	{
-		UCubismLipSyncComponent* LipSync = NewObject<UCubismLipSyncComponent>(Model, TEXT("CubismLipSync"), RF_Transactional);
+		if (IsValid(Model->LipSync))
+		{
+			// Re-initialised with another model asset: refresh the ids of the existing component.
+			Model->LipSync->Json = Model3Json;
+			Model->LipSync->Setup(Model);
+		}
+		else
+		{
+			UCubismLipSyncComponent* LipSync = NewObject<UCubismLipSyncComponent>(Model, TEXT("CubismLipSync"), RF_Transactional);
 
-		LipSync->Json = Model3Json;
+			LipSync->Json = Model3Json;
 
-		LipSync->RegisterComponent();
-		AddInstanceComponent(LipSync);
+			LipSync->RegisterComponent();
+			AddInstanceComponent(LipSync);
+		}
 	}
 
 	// setup raycast if exists
-	if (Model3Json->HitAreas.Num() > 0 && !IsValid(Model->Raycast))
+	if (Model3Json->HitAreas.Num() > 0)
 	{
-		UCubismRaycastComponent* Raycast = NewObject<UCubismRaycastComponent>(Model, TEXT("CubismRaycast"), RF_Transactional);
+		if (IsValid(Model->Raycast))
+		{
+			// Re-initialised with another model asset: refresh the ids of the existing component.
+			Model->Raycast->Json = Model3Json;
+			Model->Raycast->Setup(Model);
+		}
+		else
+		{
+			UCubismRaycastComponent* Raycast = NewObject<UCubismRaycastComponent>(Model, TEXT("CubismRaycast"), RF_Transactional);
 
-		Raycast->Json = Model3Json;
+			Raycast->Json = Model3Json;
 
-		Raycast->RegisterComponent();
-		AddInstanceComponent(Raycast);
+			Raycast->RegisterComponent();
+			AddInstanceComponent(Raycast);
+		}
 	}
-}
-
-const FString GetAssetPath(const FString& SourcePath)
-{
-	FString DirectoryPath, FileNameWithoutExt, Ext;
-	FPaths::Split(SourcePath, DirectoryPath, FileNameWithoutExt, Ext);
-
-	DirectoryPath = FPaths::ConvertRelativePathToFull(DirectoryPath);
-	DirectoryPath = FPackageName::FilenameToLongPackageName(DirectoryPath);
-
-	FileNameWithoutExt = FileNameWithoutExt.Replace(TEXT(" "), TEXT("_")).Replace(TEXT("."), TEXT("_"));
-
-	const FString& AssetPath = FString::Printf(TEXT("%s/%s.%s"), *DirectoryPath, *FileNameWithoutExt, *FileNameWithoutExt);
-
-	return AssetPath;
 }
 
 TObjectPtr<UCubismMoc3> ACubismModel::LoadMoc(const TObjectPtr<UCubismModel3Json>& Model3Json)
@@ -153,9 +173,8 @@ TObjectPtr<UCubismMoc3> ACubismModel::LoadMoc(const TObjectPtr<UCubismModel3Json
 		return nullptr;
 	}
 
-	const FString& LongPackagePath = FPackageName::GetLongPackagePath(Model3Json->GetOutermost()->GetPathName());
 
-	const FString& AssetPath = GetAssetPath(LongPackagePath / Model3Json->MocPath);
+	const FString& AssetPath = Model3Json->ResolveAssetPath(Model3Json->MocPath);
 
 	const TObjectPtr<UCubismMoc3>& Moc = LoadObject<UCubismMoc3>(nullptr, *AssetPath);
 
@@ -166,11 +185,10 @@ TArray<TObjectPtr<UTexture2D>> ACubismModel::LoadTextures(const TObjectPtr<UCubi
 {
 	TArray<TObjectPtr<UTexture2D>> Textures;
 
-	const FString& LongPackagePath = FPackageName::GetLongPackagePath(Model3Json->GetOutermost()->GetPathName());
 
 	for (const FString& TexturePath : Model3Json->TexturePaths)
 	{
-		const FString& AssetPath = GetAssetPath(LongPackagePath / TexturePath);
+		const FString& AssetPath = Model3Json->ResolveAssetPath(TexturePath);
 
 		TObjectPtr<UTexture2D> Texture = LoadObject<UTexture2D>(nullptr, *AssetPath);
 
@@ -207,9 +225,8 @@ TObjectPtr<UCubismPhysics3Json> ACubismModel::LoadPhysics3Json(const TObjectPtr<
 		return nullptr;
 	}
 
-	const FString& LongPackagePath = FPackageName::GetLongPackagePath(Model3Json->GetOutermost()->GetPathName());
 
-	const FString& AssetPath = GetAssetPath(LongPackagePath / Model3Json->PhysicsPath);
+	const FString& AssetPath = Model3Json->ResolveAssetPath(Model3Json->PhysicsPath);
 
 	const TObjectPtr<UCubismPhysics3Json>& Json = LoadObject<UCubismPhysics3Json>(nullptr, *AssetPath);
 
@@ -223,9 +240,8 @@ TObjectPtr<UCubismPose3Json> ACubismModel::LoadPose3Json(const TObjectPtr<UCubis
 		return nullptr;
 	}
 
-	const FString& LongPackagePath = FPackageName::GetLongPackagePath(Model3Json->GetOutermost()->GetPathName());
 
-	const FString& AssetPath = GetAssetPath(LongPackagePath / Model3Json->PosePath);
+	const FString& AssetPath = Model3Json->ResolveAssetPath(Model3Json->PosePath);
 
 	const TObjectPtr<UCubismPose3Json>& Json = LoadObject<UCubismPose3Json>(nullptr, *AssetPath);
 
@@ -236,11 +252,10 @@ TArray<TObjectPtr<UCubismExp3Json>> ACubismModel::LoadExp3Jsons(const TObjectPtr
 {
 	TArray<TObjectPtr<UCubismExp3Json>> Jsons;
 
-	const FString& LongPackagePath = FPackageName::GetLongPackagePath(Model3Json->GetOutermost()->GetPathName());
 
 	for (const FExpressionEntry& Entry : Model3Json->Expressions)
 	{
-		const FString& AssetPath = GetAssetPath(LongPackagePath / Entry.Path);
+		const FString& AssetPath = Model3Json->ResolveAssetPath(Entry.Path);
 
 		TObjectPtr<UCubismExp3Json> Json = LoadObject<UCubismExp3Json>(nullptr, *AssetPath);
 
@@ -254,7 +269,6 @@ TArray<FMotion3JsonGroup> ACubismModel::LoadMotion3Jsons(const TObjectPtr<UCubis
 {
 	TArray<FMotion3JsonGroup> JsonGroups;
 
-	const FString& LongPackagePath = FPackageName::GetLongPackagePath(Model3Json->GetOutermost()->GetPathName());
 
 	for (const FMotionGroupEntry& Entry : Model3Json->Motions)
 	{
@@ -262,7 +276,7 @@ TArray<FMotion3JsonGroup> ACubismModel::LoadMotion3Jsons(const TObjectPtr<UCubis
 
 		for (const FString& MotionPath : Entry.Paths)
 		{
-			const FString& AssetPath = GetAssetPath(LongPackagePath / MotionPath);
+			const FString& AssetPath = Model3Json->ResolveAssetPath(MotionPath);
 
 			TObjectPtr<UCubismMotion3Json> Json = LoadObject<UCubismMotion3Json>(nullptr, *AssetPath);
 
@@ -284,9 +298,8 @@ TObjectPtr<UCubismDisplayInfo3Json> ACubismModel::LoadDisplayInfo3Json(const TOb
 		return nullptr;
 	}
 
-	const FString& LongPackagePath = FPackageName::GetLongPackagePath(Model3Json->GetOutermost()->GetPathName());
 
-	const FString& AssetPath = GetAssetPath(LongPackagePath / Model3Json->DisplayInfoPath);
+	const FString& AssetPath = Model3Json->ResolveAssetPath(Model3Json->DisplayInfoPath);
 
 	const TObjectPtr<UCubismDisplayInfo3Json>& Json = LoadObject<UCubismDisplayInfo3Json>(nullptr, *AssetPath);
 
@@ -300,9 +313,8 @@ TObjectPtr<UCubismUserData3Json> ACubismModel::LoadUserData3Json(const TObjectPt
 		return nullptr;
 	}
 
-	const FString& LongPackagePath = FPackageName::GetLongPackagePath(Model3Json->GetOutermost()->GetPathName());
 
-	const FString& AssetPath = GetAssetPath(LongPackagePath / Model3Json->UserDataPath);
+	const FString& AssetPath = Model3Json->ResolveAssetPath(Model3Json->UserDataPath);
 
 	const TObjectPtr<UCubismUserData3Json>& Json = LoadObject<UCubismUserData3Json>(nullptr, *AssetPath);
 

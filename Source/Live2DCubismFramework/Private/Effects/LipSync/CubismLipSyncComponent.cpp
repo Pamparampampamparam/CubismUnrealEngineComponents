@@ -96,6 +96,74 @@ void UCubismLipSyncComponent::OnEnvelopeValue(const USoundWave* InSoundWave, con
 	TargetValue = FMath::Clamp(Gain * InEnvelopeValue, 0.0f, 1.0f);
 }
 
+void UCubismLipSyncComponent::OnAudioFinished()
+{
+	// No more envelope values will arrive; close the mouth instead of freezing on the last value.
+	TargetValue = 0.0f;
+}
+
+void UCubismLipSyncComponent::SetSource(USoundWave* InSource, const bool bPlayImmediately)
+{
+	Source = InSource;
+
+	if (!IsValid(Audio) && IsValid(Model))
+	{
+		Audio = CreateAudioComponent();
+	}
+
+	if (!IsValid(Audio))
+	{
+		return;
+	}
+
+	Audio->Stop();
+	Audio->SetSound(Source);
+
+	TargetValue = 0.0f;
+
+	if (bPlayImmediately && Source)
+	{
+		Audio->Play();
+	}
+}
+
+void UCubismLipSyncComponent::Play(const float StartTime)
+{
+	if (!IsValid(Audio) && IsValid(Model))
+	{
+		Audio = CreateAudioComponent();
+	}
+
+	if (!IsValid(Audio) || !Source)
+	{
+		return;
+	}
+
+	if (Audio->Sound != Source)
+	{
+		Audio->SetSound(Source);
+	}
+
+	TargetValue = 0.0f;
+
+	Audio->Play(StartTime);
+}
+
+void UCubismLipSyncComponent::Stop()
+{
+	if (IsValid(Audio))
+	{
+		Audio->Stop();
+	}
+
+	TargetValue = 0.0f;
+}
+
+bool UCubismLipSyncComponent::IsPlaying() const
+{
+	return IsValid(Audio) && Audio->IsPlaying();
+}
+
 TObjectPtr<UAudioComponent> UCubismLipSyncComponent::CreateAudioComponent()
 {
 	if (!IsValid(Model))
@@ -106,6 +174,7 @@ TObjectPtr<UAudioComponent> UCubismLipSyncComponent::CreateAudioComponent()
 	TObjectPtr<UAudioComponent> NewAudio = NewObject<UAudioComponent>(Model, NAME_None, RF_Transactional | RF_Transient);
 
 	NewAudio->OnAudioSingleEnvelopeValue.AddUniqueDynamic(this, &UCubismLipSyncComponent::OnEnvelopeValue);
+	NewAudio->OnAudioFinished.AddUniqueDynamic(this, &UCubismLipSyncComponent::OnAudioFinished);
 
 	if (!NewAudio->GetAttachParent() && !NewAudio->IsAttachedTo(Model))
 	{
@@ -228,10 +297,7 @@ void UCubismLipSyncComponent::PostEditChangeProperty(FPropertyChangedEvent& Prop
 
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismLipSyncComponent, Source))
 	{
-		if (IsValid(Audio))
-		{
-			Audio->SetSound(Source);
-		}
+		SetSource(Source, false);
 	}
 
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismLipSyncComponent, Json))
@@ -342,6 +408,12 @@ void UCubismLipSyncComponent::Update(const float DeltaTime)
 	}
 	else
 	{
+		// Envelope values only arrive while the sound plays; when it is stopped externally the mouth must close.
+		if (!IsPlaying())
+		{
+			TargetValue = 0.0f;
+		}
+
 		Value = SmoothDamp(Value, DeltaTime);
 	}
 }

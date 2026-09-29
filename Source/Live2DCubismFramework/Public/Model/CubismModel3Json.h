@@ -177,6 +177,27 @@ public:
 	UPROPERTY(VisibleAnywhere, Category = ImportSettings, meta = (DisplayName = "Cubism Stored Source Path"))
 	FString CubismStoredSourcePath;
 
+	/**
+	 * Hard references to the assets this model uses (moc, textures, motions, expressions, physics, pose, display info, user data).
+	 * The paths above are plain strings, so without these references the cooker does not package the assets
+	 * and spawning the model at runtime fails in a packaged build. Filled by CollectReferencedAssets().
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Model Data")
+	TArray<TObjectPtr<UObject>> ReferencedAssets;
+
+	/**
+	 * @brief Resolves a path from the model3.json (relative to the json) to the object path of the imported asset.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Model Data")
+	FString ResolveAssetPath(const FString& RelativePath) const;
+
+	/**
+	 * @brief Loads every asset referenced by this model and stores hard references to them (see ReferencedAssets).
+	 * Called automatically when a model actor is created in the editor; save the asset afterwards.
+	 */
+	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Model Data")
+	void CollectReferencedAssets();
+
 	// UObject interface
 	virtual void PostInitProperties() override;
 	virtual void PostLoad() override;

@@ -199,6 +199,13 @@ void UCubismRendererComponent::ApplyRenderOrder()
 	}
 }
 
+void UCubismRendererComponent::SetRenderOrder(const int32 InRenderOrder)
+{
+	RenderOrder = InRenderOrder;
+
+	ApplyRenderOrder();
+}
+
 int32 UCubismRendererComponent::CalcRenderOrder(const UCubismDrawableComponent* Drawable) const
 {
 	if (!Drawable)
