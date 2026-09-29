@@ -115,11 +115,12 @@ bool UCubismMotionComponent::PlayMotion(const int32 InIndex, const float OffsetT
 
 	if (Priority != ECubismMotionPriority::Force)
 	{
-		// Same rule as the native framework's ReserveMotion: only a strictly higher priority replaces the current motion,
-		// unless the caller reserved this exact priority beforehand.
+		// A request of lower priority than the playing (or reserved) motion is ignored: the idle never interrupts a
+		// gesture. Equal priority replaces it, so a new Normal motion cuts a running Normal one (the native framework
+		// would reject that too, which makes sample UIs and dialogue scripts feel unresponsive).
 		const bool bReservedForThis = ReservedPriority != ECubismMotionPriority::None && Priority == ReservedPriority;
 
-		if (!bReservedForThis && ((IsPlaying() && Priority <= CurrentPriority) || Priority < ReservedPriority))
+		if (!bReservedForThis && ((IsPlaying() && Priority < CurrentPriority) || Priority < ReservedPriority))
 		{
 			UE_LOG(LogCubism, Verbose, TEXT("Motion %d ignored: priority %d does not exceed the current (%d) or reserved (%d) priority."), InIndex, (int32)Priority, (int32)CurrentPriority, (int32)ReservedPriority);
 

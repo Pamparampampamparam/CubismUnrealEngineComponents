@@ -125,8 +125,8 @@ public:
 	 * @brief The function to play the motion.
 	 * @param Json The json asset that contains the motion information.
 	 * @param OffsetTime The delay time from the start of the motion to the start of the fade-in.
-	 * @param Priority The priority of the motion. A motion only replaces a playing motion of strictly lower priority:
-	 *        Idle never interrupts Normal, Normal does not interrupt another Normal, Force interrupts anything.
+	 * @param Priority The priority of the motion. A request is ignored while a motion of higher priority plays:
+	 *        Idle never interrupts Normal, Normal replaces Idle or Normal, Force interrupts anything.
 	 * @return True if the motion was started, false if it was ignored because of its priority (or an invalid index).
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
