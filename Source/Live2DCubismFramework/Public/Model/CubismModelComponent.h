@@ -800,6 +800,14 @@ private:
 	/** Reentrancy guard for EnsureModelBuilt(). */
 	bool bIsBuilding = false;
 
+	/** The `bRenderInWorldSpace` value last pushed to the drawables; visibility is only touched when it changes. */
+	TOptional<bool> AppliedRenderInWorldSpace;
+
+	/**
+	 * @brief Applies `bRenderInWorldSpace` to the drawables when it changed (or always when forced).
+	 */
+	void ApplyRenderInWorldSpace(const bool bForce);
+
 	/**
 	 * The moc the current raw model was created from. Used to detect a `Moc` change made at runtime (e.g. from Blueprint).
 	 */

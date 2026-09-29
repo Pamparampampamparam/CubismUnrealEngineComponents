@@ -126,7 +126,7 @@ void UCubismRendererComponent::Setup(UCubismModelComponent* InModel)
 
 					FCubismMaskJunction::FMaskDrawableData MaskDrawableData;
 					MaskDrawableData.Drawable = MaskDrawable;
-					MaskDrawableData.Renderer = MakeUnique<FCubismMaskRenderer>(NumVertices, NumIndices);
+					MaskDrawableData.Renderer = MakeShared<FCubismMaskRenderer, ESPMode::ThreadSafe>(NumVertices, NumIndices);
 
 					TargetJunction->MaskDrawables.Add(MoveTemp(MaskDrawableData));
 				}
@@ -206,6 +206,13 @@ void UCubismRendererComponent::SetRenderOrder(const int32 InRenderOrder)
 	ApplyRenderOrder();
 }
 
+int32 UCubismRendererComponent::GetMaxRenderOrder() const
+{
+	const int32 DrawableCount = HasValidModel() ? Model->GetDrawableCount() : 0;
+
+	return RenderOrder + DrawableCount;
+}
+
 int32 UCubismRendererComponent::CalcRenderOrder(const UCubismDrawableComponent* Drawable) const
 {
 	if (!Drawable)
@@ -263,7 +270,12 @@ void UCubismRendererComponent::SpawnMaskTexture()
 		UGameplayStatics::GetAllActorsOfClass(World, ACubismMaskTexture::StaticClass(), FoundActors);
 		if (FoundActors.Num() == 0)
 		{
-			MaskTexture = World->SpawnActor<ACubismMaskTexture>();
+			// The mask actor is shared by every model of the world, so it must not live in a streamed sub level.
+			FActorSpawnParameters SpawnParameters;
+			SpawnParameters.OverrideLevel = World->PersistentLevel;
+			SpawnParameters.ObjectFlags |= RF_Transient;
+
+			MaskTexture = World->SpawnActor<ACubismMaskTexture>(SpawnParameters);
 
 #if WITH_EDITOR
 			if (MaskTexture)
@@ -418,6 +430,20 @@ void UCubismRendererComponent::OnCubismUpdate(float DeltaTime)
 	if (!HasValidModel())
 	{
 		return;
+	}
+
+	// The shared mask actor was destroyed (e.g. its level streamed out): find or spawn another one and register again.
+	if (!IsValid(MaskTexture))
+	{
+		MaskTexture = nullptr;
+
+		SpawnMaskTexture();
+
+		if (IsValid(MaskTexture) && MaskTexture->MaskTextureComponent)
+		{
+			MaskTexture->MaskTextureComponent->ResolveMaskLayout();
+			AddTickPrerequisiteComponent(MaskTexture->MaskTextureComponent);
+		}
 	}
 
 	// The junctions are rebuilt whenever the model regenerates its drawables.

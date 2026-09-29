@@ -346,6 +346,12 @@ void UCubismMaskTextureComponent::TickComponent(float DeltaTime, ELevelTick Tick
 				continue;
 			}
 
+			// Hidden characters are not drawn, so their masks need no update either (the editor viewport still shows them).
+			if (World->IsGameWorld() && ModelActor->IsHidden())
+			{
+				continue;
+			}
+
 			const TObjectPtr<UCubismModelComponent> ModelComp = GetModel(ModelActor);
 
 			if (!ModelComp || !IsValid(ModelComp->Renderer))
@@ -418,7 +424,7 @@ void UCubismMaskTextureComponent::TickComponent(float DeltaTime, ELevelTick Tick
 					MaskDrawableInfo.Offset = Junction->Offset;
 					MaskDrawableInfo.Channel = Junction->Channel;
 					MaskDrawableInfo.MainTexture = Texture->GetResource();
-					MaskDrawableInfo.Renderer = MaskDrawableData.Renderer.Get();
+					MaskDrawableInfo.Renderer = MaskDrawableData.Renderer;
 
 					MaskDrawableInfoArray.Add(MaskDrawableInfo);
 				}

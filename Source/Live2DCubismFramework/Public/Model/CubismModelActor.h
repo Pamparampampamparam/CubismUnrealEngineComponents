@@ -168,6 +168,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism|Control")
 	void SetAutoLipSync(const bool bEnabled);
 
+	/**
+	 * @brief Freezes or resumes the whole character: motions, physics, lip sync (audio paused) and every other update.
+	 * Use it together with Set Actor Hidden In Game when a character leaves the scene for a while.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism|Control")
+	void SetCubismUpdatesEnabled(const bool bEnabled);
+
+	/**
+	 * @brief The highest translucent sort priority used by this character. VFX that must render in front of it need a higher one.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Live2D Cubism|Control")
+	int32 GetMaxRenderOrder() const;
+
 	// ---- Editor testing ----------------------------------------------------------------------------------
 
 #if WITH_EDITORONLY_DATA

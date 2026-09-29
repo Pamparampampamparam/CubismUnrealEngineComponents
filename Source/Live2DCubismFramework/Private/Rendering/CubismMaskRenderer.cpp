@@ -267,7 +267,10 @@ void FCubismMaskRenderer::DrawMeshes_RenderThread(FRHICommandList& RHICmdList, F
 		SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), ParametersPS);
 
 
-		MaskDrawableInfo.Renderer->DrawMesh_RenderThread(RHICmdList, MaskDrawableInfo);
+		if (MaskDrawableInfo.Renderer.IsValid())
+		{
+			MaskDrawableInfo.Renderer->DrawMesh_RenderThread(RHICmdList, MaskDrawableInfo);
+		}
 	}
 
 

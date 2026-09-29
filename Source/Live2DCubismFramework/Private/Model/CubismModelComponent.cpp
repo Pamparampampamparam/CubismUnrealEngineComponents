@@ -116,6 +116,16 @@ void UCubismModelComponent::Setup()
 	EnsureModelBuilt();
 }
 
+void UCubismModelComponent::ApplyRenderInWorldSpace(const bool bForce)
+{
+	if (bForce || !AppliedRenderInWorldSpace.IsSet() || AppliedRenderInWorldSpace.GetValue() != bRenderInWorldSpace)
+	{
+		SetVisibility(bRenderInWorldSpace, true);
+
+		AppliedRenderInWorldSpace = bRenderInWorldSpace;
+	}
+}
+
 bool UCubismModelComponent::EnsureModelBuilt()
 {
 	if (bIsBuilding || IsTemplate())
@@ -174,6 +184,9 @@ bool UCubismModelComponent::EnsureModelBuilt()
 
 	if (bChildComponentsRecreated)
 	{
+		// New drawables start visible; inherit the current state of the model (it may have been hidden from a Blueprint).
+		SetVisibility(GetVisibleFlag(), true);
+
 		// The helper components cache drawables, parameters and parts; they must resolve them again.
 		SetupHelperComponents();
 	}
@@ -386,7 +399,7 @@ void UCubismModelComponent::SetupChildComponents()
 		}
 	}
 
-	SetVisibility(bRenderInWorldSpace, true);
+	ApplyRenderInWorldSpace(false);
 
 	SetOverrideFlagForModelParameterRepeat(bOverrideParameterRepeat);
 }
@@ -1124,7 +1137,7 @@ void UCubismModelComponent::PostEditChangeProperty(FPropertyChangedEvent& Proper
 
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismModelComponent, bRenderInWorldSpace))
 	{
-		SetVisibility(bRenderInWorldSpace, true);
+		ApplyRenderInWorldSpace(true);
 	}
 	else if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismModelComponent, Moc))
 	{
@@ -1318,7 +1331,8 @@ void UCubismModelComponent::ComponentSetup()
 		}
 	}
 
-	SetVisibility(bRenderInWorldSpace, true);
+	ApplyRenderInWorldSpace(false);
+
 	if (GetOwner() && !GetOwner()->FindComponentByClass<UCubismUpdateControllerComponent>())
 	{
 		UCubismUpdateControllerComponent* Controller = NewObject<UCubismUpdateControllerComponent>(GetOwner(), UCubismUpdateControllerComponent::StaticClass(), TEXT("CubismUpdateController"));

@@ -15,6 +15,8 @@
 #include "Effects/LookAt/CubismLookAtComponent.h"
 #include "Effects/LookAt/CubismLookAtParameter.h"
 #include "Sound/SoundWave.h"
+#include "Components/AudioComponent.h"
+#include "CubismUpdateControllerComponent.h"
 #include "Physics/CubismPhysicsComponent.h"
 #include "Pose/CubismPoseComponent.h"
 #include "Expression/CubismExpressionComponent.h"
@@ -377,6 +379,29 @@ void ACubismModel::SetAutoLipSync(const bool bEnabled)
 	}
 
 	LipSync->bAutoEnabled = bEnabled;
+}
+
+void ACubismModel::SetCubismUpdatesEnabled(const bool bEnabled)
+{
+	if (UCubismUpdateControllerComponent* Controller = FindComponentByClass<UCubismUpdateControllerComponent>())
+	{
+		Controller->SetComponentTickEnabled(bEnabled);
+	}
+
+	if (UCubismLipSyncComponent* LipSync = GetLipSyncComponent())
+	{
+		if (UAudioComponent* Audio = LipSync->GetAudioComponent())
+		{
+			Audio->SetPaused(!bEnabled);
+		}
+	}
+}
+
+int32 ACubismModel::GetMaxRenderOrder() const
+{
+	const UCubismRendererComponent* Renderer = GetRendererComponent();
+
+	return Renderer ? Renderer->GetMaxRenderOrder() : 0;
 }
 
 void ACubismModel::SetOpacity(const float Opacity)

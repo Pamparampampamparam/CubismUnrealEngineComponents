@@ -34,7 +34,7 @@ public:
 		/**
 		 * The buffers used to draw the mask of the drawable.
 		 */
-		TUniquePtr<FCubismMaskRenderer> Renderer;
+		TSharedPtr<FCubismMaskRenderer, ESPMode::ThreadSafe> Renderer;
 	};
 
 	/**

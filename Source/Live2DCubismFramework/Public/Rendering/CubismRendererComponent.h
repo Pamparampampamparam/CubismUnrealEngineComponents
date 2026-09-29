@@ -106,6 +106,13 @@ public:
 	void SetRenderOrder(const int32 InRenderOrder);
 
 	/**
+	 * @brief The highest translucent sort priority used by the drawables of this model.
+	 * Give VFX that must appear in front of the character a higher priority than this.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Live2D Cubism")
+	int32 GetMaxRenderOrder() const;
+
+	/**
 	 * @brief The function to calculate the render order of the drawable.
 	 * @param Drawable The drawable to calculate the render order for.
 	 * @return The render order of the drawable.

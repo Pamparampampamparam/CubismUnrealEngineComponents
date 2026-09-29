@@ -43,7 +43,8 @@ public:
 		FVector4 Offset;
 		FVector4 Channel;
 		FTexture* MainTexture;
-		FCubismMaskRenderer* Renderer;
+		// Shared so that a queued draw keeps the buffers alive after the junction was destroyed (e.g. level unload).
+		TSharedPtr<FCubismMaskRenderer, ESPMode::ThreadSafe> Renderer;
 	};
 
 
