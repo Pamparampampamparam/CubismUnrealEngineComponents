@@ -22,7 +22,8 @@
 const float Epsilon = 0.001f;
 const float DefaultFadeInSeconds = 0.5f;
 
-const float Phi = 0.5f;
+// Named to avoid hiding engine globals of the same name (warning C4459 under BuildSettingsVersion.V7).
+const float PoseOpacityPhi = 0.5f;
 const float BackOpacityThreshold = 0.15f;
 
 UCubismPoseComponent::UCubismPoseComponent()
@@ -257,13 +258,13 @@ void UCubismPoseComponent::DoFade(float DeltaTime)
 				float Opacity = Part->Opacity;
 				float A1;          // The opacity calculated through the computation.
 
-				if (NewOpacity < Phi)
+				if (NewOpacity < PoseOpacityPhi)
 				{
-					A1 = NewOpacity * (Phi - 1.0f) / Phi + 1.0f; // a line through (0, 1) and (phi, phi)
+					A1 = NewOpacity * (PoseOpacityPhi - 1.0f) / PoseOpacityPhi + 1.0f; // a line through (0, 1) and (phi, phi)
 				}
 				else
 				{
-					A1 = (1.0f - NewOpacity) * Phi / (1.0f - Phi); // a line through (1, 0) and (phi, phi)
+					A1 = (1.0f - NewOpacity) * PoseOpacityPhi / (1.0f - PoseOpacityPhi); // a line through (1, 0) and (phi, phi)
 				}
 
 				const float BackOpacity = (1.0f - A1) * (1.0f - NewOpacity);

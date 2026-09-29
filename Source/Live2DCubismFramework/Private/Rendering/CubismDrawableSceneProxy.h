@@ -35,7 +35,11 @@ public:
 		: FPrimitiveSceneProxy(Drawable)
 		, DynamicData(InDynamicData)
 		, MaterialInstance(Drawable->GetMaterial(0))
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 8
+		, MaterialRelevance(Drawable->GetMaterialRelevance(GetScene().GetShaderPlatform()))
+#else
 		, MaterialRelevance(Drawable->GetMaterialRelevance(GetScene().GetFeatureLevel()))
+#endif
 	{
 		ENQUEUE_RENDER_COMMAND(FCubismDrawableSceneProxy_Ctor)(
 			[this](FRHICommandListImmediate& RHICmdList)

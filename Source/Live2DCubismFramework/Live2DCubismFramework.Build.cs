@@ -98,7 +98,7 @@ public class Live2DCubismFramework : ModuleRules
 		{
 			string CubismLibPath = Path.Combine(ThirdPartyPath, "Live2DCubismCore" , "lib/macos/x86_64");
 			string CubismDllPath = Path.Combine(ThirdPartyPath, "Live2DCubismCore" , "dll/macos");
-			string DylibName = "libLive2DCubismCore.dylib";
+			// string DylibName = "libLive2DCubismCore.dylib";
 
 			PublicSystemLibraryPaths.Add(CubismLibPath);
 			PublicAdditionalLibraries.Add(Path.Combine(CubismLibPath, "libLive2DCubismCore.a"));
