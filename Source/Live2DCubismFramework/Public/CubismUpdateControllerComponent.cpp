@@ -7,12 +7,8 @@
 
 #include "CubismUpdateControllerComponent.h"
 #include "CubismUpdatableInterface.h"
-#include "Engine/World.h"
-#include "TimerManager.h"
-#include "Model/CubismModelActor.h"
-#include "Model/CubismModelComponent.h"
-#include "Model/CubismModel3Json.h"
-#include "Model/CubismParameterComponent.h"
+#include "CubismLog.h"
+#include "GameFramework/Actor.h"
 
 UCubismUpdateControllerComponent::UCubismUpdateControllerComponent()
 {
@@ -26,17 +22,49 @@ UCubismUpdateControllerComponent::UCubismUpdateControllerComponent()
 #endif
 }
 
+UCubismUpdateControllerComponent* UCubismUpdateControllerComponent::FindController(const UActorComponent* Component)
+{
+	if (!IsValid(Component))
+	{
+		return nullptr;
+	}
+
+	const AActor* Owner = Component->GetOwner();
+
+	if (!IsValid(Owner))
+	{
+		return nullptr;
+	}
+
+	return Owner->FindComponentByClass<UCubismUpdateControllerComponent>();
+}
+
+void UCubismUpdateControllerComponent::RequestRefresh(const UActorComponent* Component)
+{
+	if (UCubismUpdateControllerComponent* Controller = FindController(Component))
+	{
+		Controller->bRefreshRequested = true;
+	}
+}
+
 void UCubismUpdateControllerComponent::OnComponentCreated()
 {
 	Super::OnComponentCreated();
 
-	UE_LOG(LogTemp, Warning, TEXT("UCubismUpdateControllerComponent::OnComponentCreated"));
-	GetWorld()->GetTimerManager().SetTimerForNextTick(this, &UCubismUpdateControllerComponent::RefreshUpdatables);
+	bRefreshRequested = true;
+}
+
+void UCubismUpdateControllerComponent::OnRegister()
+{
+	Super::OnRegister();
+
+	bRefreshRequested = true;
 }
 
 void UCubismUpdateControllerComponent::BeginPlay()
 {
 	Super::BeginPlay();
+
 	RefreshUpdatables();
 }
 
@@ -44,43 +72,42 @@ void UCubismUpdateControllerComponent::RefreshUpdatables()
 {
 	Updatables.Empty();
 
-	TArray<UActorComponent*> Components;
-	GetOwner()->GetComponents(Components);
+	bRefreshRequested = false;
 
-	for (UActorComponent* Comp : Components)
+	const AActor* Owner = GetOwner();
+
+	if (!IsValid(Owner))
 	{
-		if (!Comp)
+		return;
+	}
+
+	TArray<UActorComponent*> Components;
+	Owner->GetComponents(Components);
+
+	for (UActorComponent* Component : Components)
+	{
+		if (!IsValid(Component) || !Component->GetClass()->ImplementsInterface(UCubismUpdatableInterface::StaticClass()))
 		{
 			continue;
 		}
 
-		UE_LOG(LogTemp, Warning, TEXT("Found Component: %s (%s)"), *Comp->GetName(), *Comp->GetClass()->GetName());
+		ICubismUpdatableInterface* Interface = Cast<ICubismUpdatableInterface>(Component);
 
-		if (Comp->GetClass()->ImplementsInterface(UCubismUpdatableInterface::StaticClass()))
+		if (!Interface || !Interface->IsControlledByUpdateController())
 		{
-			UE_LOG(LogTemp, Warning, TEXT("Implements CubismUpdatableInterface: %s"), *Comp->GetName());
+			continue;
 		}
 
-		if (Comp->GetClass()->ImplementsInterface(UCubismUpdatableInterface::StaticClass()))
-		{
-			ICubismUpdatableInterface* InterfacePtr = Cast<ICubismUpdatableInterface>(Comp);
-			if (InterfacePtr)
-			{
-				TScriptInterface<ICubismUpdatableInterface> InterfaceObj;
-				InterfaceObj.SetObject(Comp);
-				InterfaceObj.SetInterface(InterfacePtr);
+		TScriptInterface<ICubismUpdatableInterface> Updatable;
+		Updatable.SetObject(Component);
+		Updatable.SetInterface(Interface);
 
-				UE_LOG(LogTemp, Warning, TEXT("Registered Updatable: %s"), *Comp->GetName());
-				Updatables.Add(InterfaceObj);
-			}
-			else
-			{
-				UE_LOG(LogTemp, Warning, TEXT("ImplementsInterface returned true, but Cast failed: %s"), *Comp->GetName());
-			}
-		}
+		UE_LOG(LogCubism, Verbose, TEXT("UCubismUpdateControllerComponent: registered %s"), *Component->GetName());
+
+		Updatables.Add(Updatable);
 	}
 
-	Updatables.Sort([](const TScriptInterface<ICubismUpdatableInterface>& A, const TScriptInterface<ICubismUpdatableInterface>& B)
+	Updatables.StableSort([](const TScriptInterface<ICubismUpdatableInterface>& A, const TScriptInterface<ICubismUpdatableInterface>& B)
 	{
 		return A->GetExecutionOrder() < B->GetExecutionOrder();
 	});
@@ -90,17 +117,30 @@ void UCubismUpdateControllerComponent::TickComponent(float DeltaTime, ELevelTick
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (Updatables.Num() == 0)
+	if (bRefreshRequested)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Updatables is empty — trying RefreshUpdatables now"));
 		RefreshUpdatables();
 	}
 
-	for (const auto& Updatable : Updatables)
+	// Iterate over a copy: an update may create or destroy components, which requests a refresh of the list.
+	const TArray<TScriptInterface<ICubismUpdatableInterface>> CurrentUpdatables = Updatables;
+
+	for (const TScriptInterface<ICubismUpdatableInterface>& Updatable : CurrentUpdatables)
 	{
-		if (Updatable)
+		const UActorComponent* Component = Cast<UActorComponent>(Updatable.GetObject());
+
+		if (!IsValid(Component) || !Updatable.GetInterface())
 		{
-			Updatable->OnCubismUpdate(DeltaTime);
+			bRefreshRequested = true;
+			continue;
 		}
+
+		// Respect the per-component tick switch (e.g. the editor toggles of the effect components).
+		if (!Component->IsComponentTickEnabled())
+		{
+			continue;
+		}
+
+		Updatable->OnCubismUpdate(DeltaTime);
 	}
 }

@@ -9,8 +9,11 @@
 #include "Motion/CubismMotionComponent.h"
 
 #include "CubismUpdateExecutionOrder.h"
+#include "CubismUpdateControllerComponent.h"
+
 #include "Motion/CubismMotion3Json.h"
 #include "Motion/CubismMotion.h"
+#include "Model/CubismModelComponent.h"
 #include "Model/CubismParameterComponent.h"
 #include "Model/CubismParameterStoreComponent.h"
 #include "Model/CubismPartComponent.h"
@@ -18,6 +21,8 @@
 #include "CubismLog.h"
 
 UCubismMotionComponent::UCubismMotionComponent()
+	: Time(0.0f)
+	, bWasPlaying(false)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
@@ -28,39 +33,48 @@ void UCubismMotionComponent::Setup(UCubismModelComponent* InModel)
 {
 	if (!InModel)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("CubismMotionComponent::Setup - InModel is null. Skipping setup."));
 		return;
 	}
 
-	check(InModel);
-
-	if (Model != InModel)
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
 	{
-		Model = InModel;
+		return;
 	}
+
+	Model = InModel;
+
+	UCubismUpdateControllerComponent::RequestRefresh(this);
 
 	Time = 0.0f;
 	MotionQueue.Empty();
+	CurrentPriority = ECubismMotionPriority::None;
+	bWasPlaying = false;
 
 	if (Model->Motion != this)
 	{
-		if (Model->Motion)
+		if (IsValid(Model->Motion))
 		{
 			Model->Motion->DestroyComponent();
 		}
 		Model->Motion = this;
 	}
-	if (Model && Model->ParameterStore)
+
+	if (IsValid(Model->ParameterStore))
 	{
 		AddTickPrerequisiteComponent(Model->ParameterStore); // must be updated after parameters loaded
 	}
+}
+
+bool UCubismMotionComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
 }
 
 bool UCubismMotionComponent::IsFinished() const
 {
 	for (const TSharedPtr<FCubismMotion>& Motion : MotionQueue)
 	{
-		if (Motion->State != ECubismMotionState::End)
+		if (Motion.IsValid() && Motion->State != ECubismMotionState::End)
 		{
 			return false;
 		}
@@ -85,12 +99,19 @@ void UCubismMotionComponent::PlayMotion(const int32 InIndex, const float OffsetT
 {
 	if (!Jsons.IsValidIndex(InIndex))
 	{
-		UE_LOG(LogCubism, Warning, TEXT("Motion cannot be played. Index is out of range."));
+		UE_LOG(LogCubism, Warning, TEXT("Motion cannot be played. Index %d is out of range."), InIndex);
 
 		return;
 	}
 
 	const TObjectPtr<UCubismMotion3Json>& Json = Jsons[InIndex];
+
+	if (!Json)
+	{
+		UE_LOG(LogCubism, Warning, TEXT("Motion cannot be played. The motion asset at index %d is not set."), InIndex);
+
+		return;
+	}
 
 	if (Priority == ReservedPriority || Priority == ECubismMotionPriority::Force)
 	{
@@ -101,7 +122,10 @@ void UCubismMotionComponent::PlayMotion(const int32 InIndex, const float OffsetT
 
 	for (const TSharedPtr<FCubismMotion>& Motion : MotionQueue)
 	{
-		Motion->SetFadeout(Motion->FadeOutTime);
+		if (Motion.IsValid())
+		{
+			Motion->SetFadeout(Motion->FadeOutTime);
+		}
 	}
 
 	TSharedPtr<FCubismMotion> NextMotion = MakeShared<FCubismMotion>(Json, OffsetTime);
@@ -109,19 +133,33 @@ void UCubismMotionComponent::PlayMotion(const int32 InIndex, const float OffsetT
 	MotionQueue.Add(NextMotion);
 }
 
+bool UCubismMotionComponent::IsPlaying() const
+{
+	return MotionQueue.Num() > 0;
+}
+
 void UCubismMotionComponent::StopAllMotions(const bool bForce)
 {
 	if (bForce)
 	{
 		MotionQueue.Empty();
+		CurrentPriority = ECubismMotionPriority::None;
 	}
 	else
 	{
 		for (const TSharedPtr<FCubismMotion>& Motion : MotionQueue)
 		{
-			Motion->FadeOut(Time);
+			if (Motion.IsValid())
+			{
+				Motion->FadeOut(Time);
+			}
 		}
 	}
+}
+
+TObjectPtr<UCubismModelComponent> UCubismMotionComponent::GetModel()
+{
+	return UCubismModelComponent::FindModelComponent(this);
 }
 
 // UObject interface
@@ -129,22 +167,11 @@ void UCubismMotionComponent::PostLoad()
 {
 	Super::PostLoad();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
-	if (!Owner || !Owner->Model)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("No Owner or Model."));
-		return;
-	}
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	Setup(Owner->Model);
-
-	if (Index >= 0 && Jsons.IsValidIndex(Index))
+	if (ModelComp)
 	{
-		PlayMotion(Index, 0.0f, ECubismMotionPriority::Normal);
-	}
-	else
-	{
-		UE_LOG(LogTemp, Warning, TEXT("CubismMotionComponent: Animation not started (index %d)"), Index);
+		Setup(ModelComp);
 	}
 }
 
@@ -175,28 +202,46 @@ void UCubismMotionComponent::OnComponentCreated()
 {
 	Super::OnComponentCreated();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	if (!Owner)
+	if (ModelComp)
 	{
-		return;
+		Setup(ModelComp);
+	}
+}
+
+void UCubismMotionComponent::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (!IsValid(Model))
+	{
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
 	}
 
-	if (!Owner->Model)
+	// Motions played in the editor are not carried into the game, start the configured one.
+	if (bAutoPlay && MotionQueue.Num() == 0 && Jsons.Num() > 0)
 	{
-		return;
+		const int32 PlayIndex = Jsons.IsValidIndex(Index) ? Index : 0;
+
+		if (Jsons[PlayIndex])
+		{
+			PlayMotion(PlayIndex, 0.0f, ECubismMotionPriority::Idle);
+		}
 	}
-	Setup(Owner->Model);
 }
 
 void UCubismMotionComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
 {
-	if (!Model) return;
-
-	if (Model->Motion == this)
+	if (IsValid(Model) && Model->Motion == this)
 	{
 		Model->Motion = nullptr;
 	}
+
+	MotionQueue.Empty();
 
 	Super::OnComponentDestroyed(bDestroyingHierarchy);
 }
@@ -206,18 +251,10 @@ void UCubismMotionComponent::PostEditUndo()
 {
 	Super::PostEditUndo();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
-
-	if (!Owner)
+	if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
 }
 #endif
 
@@ -225,11 +262,12 @@ void UCubismMotionComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (IsControlledByUpdateController())
+	// When an update controller drives this actor it calls OnCubismUpdate in execution order instead.
+	if (IsControlledByUpdateController() && UCubismUpdateControllerComponent::FindController(this))
 	{
 		return;
 	}
-	
+
 	OnCubismUpdate(DeltaTime);
 }
 
@@ -238,176 +276,18 @@ int32 UCubismMotionComponent::GetExecutionOrder() const
 	return CUBISM_EXECUTION_ORDER_MOTION;
 }
 
-void UCubismMotionComponent::UpdateMotion(
-	float UserTimeSeconds,
-	const TSharedPtr<FCubismMotion>& CubismMotion)
-{
-
-	float Elapsed = UserTimeSeconds - CubismMotion->StartTime;
-	if (Elapsed < 0.0f)
-	{
-		Elapsed = 0.0f;
-	}
-
-	float MotionTime = Elapsed;
-	if (CubismMotion->State == ECubismMotionState::PlayInLoop && CubismMotion->Duration > 0.0f)
-	{
-		MotionTime = FMath::Fmod(Elapsed, CubismMotion->Duration);
-		if (MotionTime < 0.0f)
-		{
-			MotionTime += CubismMotion->Duration;
-		}
-	}
-
-
-	auto EndSecForThisCycle = [&]() -> float
-	{
-		if (CubismMotion->GetEndTime() >= 0.0f)
-		{
-			return CubismMotion->GetEndTime();
-		}
-
-		if (CubismMotion->State == ECubismMotionState::PlayInLoop && CubismMotion->Duration > 0.0f)
-		{
-			return CubismMotion->FadeInAnchorTime + CubismMotion->Duration;
-		}
-		return -1.0f;
-	};
-
-	float TailT = -1.0f;
-	if (CubismMotion->State == ECubismMotionState::PlayInLoop && CubismMotion->Duration > 0.0f && CubismMotion->Fps > 0.0f)
-	{
-		const float Delta = 1.0f / CubismMotion->Fps;
-		if (MotionTime > CubismMotion->Duration - Delta)
-		{
-			TailT = (MotionTime - (CubismMotion->Duration - Delta)) / Delta;
-			TailT = FMath::Clamp(TailT, 0.0f, 1.0f);
-		}
-	}
-
-	const float MotionWeight = FMath::Clamp(CubismMotion->GetWeight(), 0.0f, 1.0f);
-	const float TmpFadeIn = (CubismMotion->FadeInTime <= 0.0f)
-		? 1.0f
-		: FCubismMotion::EasingSin((UserTimeSeconds - CubismMotion->FadeInAnchorTime) / CubismMotion->FadeInTime);
-
-	const float EndSecMotion = EndSecForThisCycle();
-	const float TmpFadeOut = (CubismMotion->FadeOutTime <= 0.0f || EndSecMotion < 0.0f)
-		? 1.0f
-		: FCubismMotion::EasingSin((EndSecMotion - UserTimeSeconds) / CubismMotion->FadeOutTime);
-
-	const float MotionFadeWeight = FMath::Clamp(MotionWeight * TmpFadeIn * TmpFadeOut, 0.0f, 1.0f);
-
-	const TArray<FCubismMotionCurve>& Curves = CubismMotion->Curves;
-
-	for (const FCubismMotionCurve& Curve : Curves)
-	{
-		if (Curve.Target != ECubismMotionCurveTarget::Model) continue;
-
-		float Curr = CubismMotion->GetValue(Curve.Id, MotionTime);
-		if (TailT >= 0.0f)
-		{
-			const float Start = CubismMotion->GetValue(Curve.Id, 0.0f);
-			Curr = FMath::Lerp(Curr, Start, TailT);
-		}
-
-		if (Curve.Id == "Opacity")
-		{
-			Model->Opacity = Curr;
-		}
-	}
-
-	for (const FCubismMotionCurve& Curve : Curves)
-	{
-		if (Curve.Target != ECubismMotionCurveTarget::Parameter) continue;
-
-		UCubismParameterComponent* Parameter = Model->GetParameter(Curve.Id);
-		if (!Parameter) continue;
-
-		const float SourceValue = Parameter->Value;
-
-		float TargetNow = CubismMotion->GetValue(Curve.Id, MotionTime);
-		if (Parameter->IsRepeat())
-		{
-			TargetNow = Parameter->GetParameterRepeatValue(TargetNow);
-		}
-
-		if (Curve.FadeInTime < 0.0f && Curve.FadeOutTime < 0.0f)
-		{
-			const float WeightUsed = MotionFadeWeight;
-
-			float NewValueNow = SourceValue + (TargetNow - SourceValue) * WeightUsed;
-
-			if (TailT >= 0.0f)
-			{
-				float TargetStart = CubismMotion->GetValue(Curve.Id, 0.0f);
-				if (Parameter->IsRepeat())
-				{
-					TargetStart = Parameter->GetParameterRepeatValue(TargetStart);
-				}
-				const float NewValueStart = SourceValue + (TargetStart - SourceValue) * WeightUsed;
-				NewValueNow = FMath::Lerp(NewValueNow, NewValueStart, TailT);
-			}
-
-			Parameter->SetParameterValue(NewValueNow);
-			continue;
-		}
-
-		float fin = TmpFadeIn;
-		float fout = TmpFadeOut;
-
-		if (Curve.FadeInTime >= 0.0f)
-		{
-			fin = (Curve.FadeInTime == 0.0f)
-				? 1.0f
-				: FCubismMotion::EasingSin((UserTimeSeconds - CubismMotion->FadeInAnchorTime) / Curve.FadeInTime);
-		}
-
-		if (Curve.FadeOutTime >= 0.0f)
-		{
-			const float EndSecParam = EndSecForThisCycle();
-			fout = (Curve.FadeOutTime == 0.0f || EndSecParam < 0.0f)
-				? 1.0f
-				: FCubismMotion::EasingSin((EndSecParam - UserTimeSeconds) / Curve.FadeOutTime);
-		}
-
-		const float ParamWeight = FMath::Clamp(MotionWeight * fin * fout, 0.0f, 1.0f);
-
-		float NewValueNow = SourceValue + (TargetNow - SourceValue) * ParamWeight;
-
-		if (TailT >= 0.0f)
-		{
-			float TargetStart = CubismMotion->GetValue(Curve.Id, 0.0f);
-			if (Parameter->IsRepeat())
-			{
-				TargetStart = Parameter->GetParameterRepeatValue(TargetStart);
-			}
-			const float NewValueStart = SourceValue + (TargetStart - SourceValue) * ParamWeight;
-			NewValueNow = FMath::Lerp(NewValueNow, NewValueStart, TailT);
-		}
-
-		Parameter->SetParameterValue(NewValueNow);
-	}
-
-	for (const FCubismMotionCurve& Curve : Curves)
-	{
-		if (Curve.Target != ECubismMotionCurveTarget::PartOpacity) continue;
-
-		UCubismParameterComponent* Parameter = Model->GetParameter(Curve.Id);
-		if (!Parameter) continue;
-
-		float v = CubismMotion->GetValue(Curve.Id, MotionTime);
-		if (TailT >= 0.0f)
-		{
-			const float startV = CubismMotion->GetValue(Curve.Id, 0.0f);
-			v = FMath::Lerp(v, startV, TailT);
-		}
-		Parameter->SetParameterValue(v);
-	}
-}
-
 void UCubismMotionComponent::OnCubismUpdate(float DeltaTime)
 {
-	if (!Model)
+	if (!IsValid(Model))
+	{
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel())
 	{
 		return;
 	}
@@ -416,7 +296,13 @@ void UCubismMotionComponent::OnCubismUpdate(float DeltaTime)
 
 	for (int32 i = 0; i < MotionQueue.Num();)
 	{
-		TSharedPtr<FCubismMotion>& Motion = MotionQueue[i];
+		TSharedPtr<FCubismMotion> Motion = MotionQueue[i];
+
+		if (!Motion.IsValid())
+		{
+			MotionQueue.RemoveAt(i);
+			continue;
+		}
 
 		if (Motion->State == ECubismMotionState::None)
 		{
@@ -426,15 +312,22 @@ void UCubismMotionComponent::OnCubismUpdate(float DeltaTime)
 		}
 
 		float Elapsed = Time - Motion->StartTime;
-		if (Elapsed < 0.0f) Elapsed = 0.0f;
+		if (Elapsed < 0.0f)
+		{
+			Elapsed = 0.0f;
+		}
 
 		float Phase = Elapsed;
 		if (Motion->State == ECubismMotionState::PlayInLoop && Motion->Duration > 0.0f)
 		{
 			Phase = FMath::Fmod(Elapsed, Motion->Duration);
-			if (Phase < 0.0f) Phase += Motion->Duration;
+			if (Phase < 0.0f)
+			{
+				Phase += Motion->Duration;
+			}
 		}
 
+		// A loop seam is detected when the phase wraps around; the fade-in is restarted from there when requested.
 		const bool bLoopSeam =
 			(Motion->State == ECubismMotionState::PlayInLoop) &&
 			(Motion->Duration > 0.0f) &&
@@ -463,11 +356,211 @@ void UCubismMotionComponent::OnCubismUpdate(float DeltaTime)
 		}
 	}
 
-	if (IsFinished())
+	const bool bIsPlaying = MotionQueue.Num() > 0;
+
+	if (!bIsPlaying)
 	{
 		CurrentPriority = ECubismMotionPriority::None;
+	}
 
+	// Only notify on the transition from playing to finished, not every idle frame.
+	if (bWasPlaying && !bIsPlaying)
+	{
 		OnMotionPlaybackFinished.Broadcast();
 	}
+
+	bWasPlaying = bIsPlaying;
 }
 // End of UActorComponent interface
+
+void UCubismMotionComponent::UpdateMotion(float UserTimeSeconds, const TSharedPtr<FCubismMotion>& CubismMotion)
+{
+	if (!CubismMotion.IsValid() || !HasValidModel())
+	{
+		return;
+	}
+
+	float Elapsed = UserTimeSeconds - CubismMotion->StartTime;
+	if (Elapsed < 0.0f)
+	{
+		Elapsed = 0.0f;
+	}
+
+	// 'Repeat' time as necessary.
+	float MotionTime = Elapsed;
+	if (CubismMotion->State == ECubismMotionState::PlayInLoop && CubismMotion->Duration > 0.0f)
+	{
+		MotionTime = FMath::Fmod(Elapsed, CubismMotion->Duration);
+		if (MotionTime < 0.0f)
+		{
+			MotionTime += CubismMotion->Duration;
+		}
+	}
+
+	// The absolute time (in component time) at which the current cycle ends, or -1 when it plays indefinitely.
+	auto EndSecForThisCycle = [&]() -> float
+	{
+		if (CubismMotion->GetEndTime() >= 0.0f)
+		{
+			return CubismMotion->GetEndTime();
+		}
+
+		if (CubismMotion->State == ECubismMotionState::PlayInLoop && CubismMotion->Duration > 0.0f)
+		{
+			return CubismMotion->FadeInAnchorTime + CubismMotion->Duration;
+		}
+
+		return -1.0f;
+	};
+
+	// Blend the last frame of a loop into its first frame so that the seam does not pop.
+	float TailT = -1.0f;
+	if (CubismMotion->State == ECubismMotionState::PlayInLoop && CubismMotion->Duration > 0.0f && CubismMotion->Fps > 0.0f)
+	{
+		const float Delta = 1.0f / CubismMotion->Fps;
+		if (MotionTime > CubismMotion->Duration - Delta)
+		{
+			TailT = (MotionTime - (CubismMotion->Duration - Delta)) / Delta;
+			TailT = FMath::Clamp(TailT, 0.0f, 1.0f);
+		}
+	}
+
+	const float MotionWeight = FMath::Clamp(CubismMotion->GetWeight(), 0.0f, 1.0f);
+	const float TmpFadeIn = (CubismMotion->FadeInTime <= 0.0f)
+		? 1.0f
+		: FCubismMotion::EasingSin((UserTimeSeconds - CubismMotion->FadeInAnchorTime) / CubismMotion->FadeInTime);
+
+	const float EndSecMotion = EndSecForThisCycle();
+	const float TmpFadeOut = (CubismMotion->FadeOutTime <= 0.0f || EndSecMotion < 0.0f)
+		? 1.0f
+		: FCubismMotion::EasingSin((EndSecMotion - UserTimeSeconds) / CubismMotion->FadeOutTime);
+
+	const float MotionFadeWeight = FMath::Clamp(MotionWeight * TmpFadeIn * TmpFadeOut, 0.0f, 1.0f);
+
+	const TArray<FCubismMotionCurve>& Curves = CubismMotion->Curves;
+
+	// Evaluate model curves.
+	for (const FCubismMotionCurve& Curve : Curves)
+	{
+		if (Curve.Target != ECubismMotionCurveTarget::Model)
+		{
+			continue;
+		}
+
+		float Value = CubismMotion->GetValue(Curve.Id, MotionTime);
+		if (TailT >= 0.0f)
+		{
+			const float Start = CubismMotion->GetValue(Curve.Id, 0.0f);
+			Value = FMath::Lerp(Value, Start, TailT);
+		}
+
+		if (Curve.Id == "Opacity")
+		{
+			Model->Opacity = Value;
+		}
+	}
+
+	// Evaluate parameter curves.
+	for (const FCubismMotionCurve& Curve : Curves)
+	{
+		if (Curve.Target != ECubismMotionCurveTarget::Parameter)
+		{
+			continue;
+		}
+
+		UCubismParameterComponent* Parameter = Model->GetParameter(Curve.Id);
+
+		// Skip curve evaluation if no value in sink.
+		if (!Parameter)
+		{
+			continue;
+		}
+
+		const float SourceValue = Parameter->Value;
+
+		float TargetNow = CubismMotion->GetValue(Curve.Id, MotionTime);
+		if (Parameter->IsRepeat())
+		{
+			TargetNow = Parameter->GetParameterRepeatValue(TargetNow);
+		}
+
+		float ParamWeight = MotionFadeWeight;
+
+		// If fade-in or fade-out is set for a parameter, apply it.
+		if (Curve.FadeInTime >= 0.0f || Curve.FadeOutTime >= 0.0f)
+		{
+			float FadeInWeight = TmpFadeIn;
+			float FadeOutWeight = TmpFadeOut;
+
+			if (Curve.FadeInTime >= 0.0f)
+			{
+				FadeInWeight = (Curve.FadeInTime == 0.0f)
+					? 1.0f
+					: FCubismMotion::EasingSin((UserTimeSeconds - CubismMotion->FadeInAnchorTime) / Curve.FadeInTime);
+			}
+
+			if (Curve.FadeOutTime >= 0.0f)
+			{
+				FadeOutWeight = (Curve.FadeOutTime == 0.0f || EndSecMotion < 0.0f)
+					? 1.0f
+					: FCubismMotion::EasingSin((EndSecMotion - UserTimeSeconds) / Curve.FadeOutTime);
+			}
+
+			ParamWeight = FMath::Clamp(MotionWeight * FadeInWeight * FadeOutWeight, 0.0f, 1.0f);
+		}
+
+		float NewValue = SourceValue + (TargetNow - SourceValue) * ParamWeight;
+
+		if (TailT >= 0.0f)
+		{
+			float TargetStart = CubismMotion->GetValue(Curve.Id, 0.0f);
+			if (Parameter->IsRepeat())
+			{
+				TargetStart = Parameter->GetParameterRepeatValue(TargetStart);
+			}
+			const float NewValueStart = SourceValue + (TargetStart - SourceValue) * ParamWeight;
+			NewValue = FMath::Lerp(NewValue, NewValueStart, TailT);
+		}
+
+		Parameter->SetParameterValue(NewValue);
+	}
+
+	// Evaluate part opacity curves.
+	for (const FCubismMotionCurve& Curve : Curves)
+	{
+		if (Curve.Target != ECubismMotionCurveTarget::PartOpacity)
+		{
+			continue;
+		}
+
+		// Part opacities are driven through parameters of the same ID (mirrors the native framework and the pose component).
+		UCubismParameterComponent* Parameter = Model->GetParameter(Curve.Id);
+
+		if (!Parameter)
+		{
+			continue;
+		}
+
+		float Value = CubismMotion->GetValue(Curve.Id, MotionTime);
+		if (TailT >= 0.0f)
+		{
+			const float Start = CubismMotion->GetValue(Curve.Id, 0.0f);
+			Value = FMath::Lerp(Value, Start, TailT);
+		}
+
+		Parameter->SetParameterValue(Value);
+	}
+
+	// The end time is absolute (in component time) and negative while no fade-out has been requested.
+	const float MotionEndTime = CubismMotion->GetEndTime();
+
+	if ((MotionEndTime >= 0.0f) && (MotionEndTime < UserTimeSeconds))
+	{
+		CubismMotion->IsFinished(true);
+	}
+
+	if (CubismMotion->State != ECubismMotionState::PlayInLoop && Elapsed > CubismMotion->Duration)
+	{
+		CubismMotion->IsFinished(true);
+	}
+}

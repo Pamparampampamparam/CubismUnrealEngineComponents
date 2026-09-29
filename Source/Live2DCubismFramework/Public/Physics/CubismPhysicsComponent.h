@@ -7,9 +7,11 @@
 
 
 #pragma once
-#include "CubismUpdatableInterface.h"
+
 #include "Physics/CubismPhysicsRig.h"
+
 #include "Components/ActorComponent.h"
+#include "CubismUpdatableInterface.h"
 #include "CubismPhysicsComponent.generated.h"
 
 class UCubismModelComponent;
@@ -17,7 +19,7 @@ class UCubismModelComponent;
 /**
  * A component to apply the physics to the specified parameters of the Cubism model.
  */
-UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
+UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class LIVE2DCUBISMFRAMEWORK_API UCubismPhysicsComponent : public UActorComponent, public ICubismUpdatableInterface
 {
 	GENERATED_BODY()
@@ -47,19 +49,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "120.0"))
 	float Fps = 0.0f;
 
-	// ICubismUpdatableInterface
-	virtual bool IsControlledByUpdateController() const override { return true; }
-	virtual int32 GetExecutionOrder() const override;
-	virtual void OnCubismUpdate(float DeltaTime) override;
-
-	/**
-	 * Whether to update physics in editor mode.
-	 */
-#if WITH_EDITORONLY_DATA
-	UPROPERTY(EditAnywhere, Category = "Live2D Cubism")
-	bool bEnablePhysicsInEditor = false;
-#endif
-
 public:
 	/**
 	 * @brief The function to set up the component.
@@ -75,20 +64,38 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void Stabilization();
 
-private:
-	friend class UCubismModelComponent;
+	// ICubismUpdatableInterface
+	virtual bool IsControlledByUpdateController() const override { return true; }
+	virtual int32 GetExecutionOrder() const override;
+	virtual void OnCubismUpdate(float DeltaTime) override;
+
+#if WITH_EDITORONLY_DATA
+	/**
+	 * Whether to update physics in editor mode.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Live2D Cubism")
+	bool bEnablePhysicsInEditor = false;
+#endif
 
 	/**
-	 * The model component that the component depends on.
+	 * @brief Whether the component is bound to a model that is ready to be queried.
 	 */
-	UPROPERTY()
-	TObjectPtr<UCubismModelComponent> Model;
+	bool HasValidModel() const;
 
 private:
 	/**
 	 * @brief The constructor of the component.
 	 */
 	UCubismPhysicsComponent();
+
+	TObjectPtr<UCubismModelComponent> GetModel();
+
+	/**
+	 * @brief The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
+	 */
+	UPROPERTY(Transient, DuplicateTransient)
+	TObjectPtr<UCubismModelComponent> Model;
 
 	/**
 	 * The physics state of the model.
@@ -144,7 +151,7 @@ public:
 	// UObject interface
 	virtual void PostLoad() override;
 
-#if WITH_EDITORONLY_DATA
+#if WITH_EDITOR
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	// End of UObject interface

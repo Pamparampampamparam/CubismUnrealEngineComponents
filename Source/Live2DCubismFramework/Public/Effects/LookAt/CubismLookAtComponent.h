@@ -9,6 +9,7 @@
 #pragma once
 
 #include "Components/ActorComponent.h"
+#include "CubismUpdatableInterface.h"
 #include "CubismLookAtComponent.generated.h"
 
 class UCubismModelComponent;
@@ -18,7 +19,7 @@ struct FCubismLookAtParameter;
  * A component to apply the look-at effect to the specified parameters of the Cubism model.
  */
 UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
-class LIVE2DCUBISMFRAMEWORK_API UCubismLookAtComponent : public UActorComponent
+class LIVE2DCUBISMFRAMEWORK_API UCubismLookAtComponent : public UActorComponent, public ICubismUpdatableInterface
 {
 	GENERATED_BODY()
 
@@ -50,20 +51,30 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void Setup(UCubismModelComponent* InModel);
 
-private:
-	friend class UCubismModelComponent;
+	// ICubismUpdatableInterface
+	virtual bool IsControlledByUpdateController() const override { return true; }
+	virtual int32 GetExecutionOrder() const override;
+	virtual void OnCubismUpdate(float DeltaTime) override;
 
 	/**
-	 * The model component that the component depends on.
+	 * @brief Whether the component is bound to a model that is ready to be queried.
 	 */
-	UPROPERTY()
-	TObjectPtr<UCubismModelComponent> Model;
+	bool HasValidModel() const;
 
 private:
 	/**
 	 * @brief The constructor of the component.
 	 */
 	UCubismLookAtComponent();
+
+	TObjectPtr<UCubismModelComponent> GetModel();
+
+	/**
+	 * The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
+	 */
+	UPROPERTY(Transient, DuplicateTransient)
+	TObjectPtr<UCubismModelComponent> Model;
 
 	/**
 	 * The smoothed position of the look-at target.

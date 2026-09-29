@@ -8,16 +8,16 @@
 
 #pragma once
 
-#include "Model/CubismModelActor.h"
+#include "Components/ActorComponent.h"
 #include "Engine/TextureRenderTarget2D.h"
-
 #include "CubismMaskTextureComponent.generated.h"
 
 class FCubismMaskJunction;
 class UCubismRendererComponent;
+class UCubismModelComponent;
 
 /**
- * A component to manage mask textures for Live2D Cubism models.
+ * A component to manage the render targets that the masks of the models are drawn to.
  */
 UCLASS(BlueprintType)
 class LIVE2DCUBISMFRAMEWORK_API UCubismMaskTextureComponent : public UActorComponent
@@ -26,68 +26,63 @@ class LIVE2DCUBISMFRAMEWORK_API UCubismMaskTextureComponent : public UActorCompo
 
 public:
 	/**
-	 * The size of the mask texture (in pixels).
+	 * The size of each render target.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
 	int32 Size = 4096;
 
 	/**
-	 * The flag to specify whether to use multiple render targets to manage masks.
-	 * The default is false.
+	 * The flag to use several render targets.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
 	bool bUseMultiRenderTargets = false;
 
 	/**
-	 * The number of mask textures used if `bUseMultiRenderTargets` is `true`.
+	 * The number of render targets when `bUseMultiRenderTargets` is set.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "1", SliderMin = "1", EditCondition = "bUseMultiRenderTargets"), Category = "Live2D Cubism")
 	int32 RenderTargetCount = 1;
 
 	/**
-	 * If `bUseMultiRenderTargets` is `true`, this property specifies the level of detail of masks in each render target.
-	 * The mask area of the render target is divided for each increment of this value.
-	 * Therefore, the resolution of the placed masks is halved, and the number of masks placed in one render target is 4 times.
+	 * The level of detail of the mask layout when `bUseMultiRenderTargets` is set.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0", SliderMin = "0", EditCondition = "bUseMultiRenderTargets"), Category = "Live2D Cubism")
 	int32 LOD = 0;
 
 	/**
-	 * The number of masks assigned to the component.
+	 * The total number of masks drawn.
 	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Live2D Cubism")
 	int32 NumMasks;
 
 	/**
-	 * The list of ACubismModel instances whose masks are managed by the component.
+	 * The actors carrying a model component whose masks are drawn into these render targets.
 	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Live2D Cubism")
-	TArray<TObjectPtr<ACubismModel>> Models;
+	TArray<TObjectPtr<AActor>> Models;
 
 	/**
-	 * The list of render targets where the assigned masks are drawn.
+	 * The render targets the masks are drawn to.
 	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Live2D Cubism")
 	TArray<TObjectPtr<UTextureRenderTarget2D>> RenderTargets;
 
 	/**
-	 * @brief The function to add a model to the component.
-	 * @param Model The model to add.
+	 * @brief Registers the actor of a model with this mask texture.
+	 * @param Model Any actor that has a UCubismModelComponent.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
-	void AddModel(ACubismModel* Model);
+	void AddModel(AActor* Model);
 
 	/**
-	 * @brief The function to remove a model from the component.
-	 * @param Model The model to remove.
+	 * @brief Unregisters the actor of a model from this mask texture.
+	 * @param Model Any actor that has a UCubismModelComponent.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
-	void RemoveModel(ACubismModel* Model);
+	void RemoveModel(AActor* Model);
 
 	/**
-	 * ResolveMaskLayout
-	 * @brief The function to resolve the layout of the masks.
-	 * The function rearranges the masks drawn on the render target based on the specified settings.
+	 * @brief Assigns a render target, an offset and a channel to every mask junction of the registered models.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void ResolveMaskLayout();
@@ -98,27 +93,21 @@ private:
 	 */
 	UCubismMaskTextureComponent();
 
-	/**
-	 * @brief The function to calculate the optimal level of detail under the current settings.
-	 * @return The optimal level of detail.
-	 */
+	static TObjectPtr<UCubismModelComponent> GetModel(AActor* Model);
+
 	inline int32 CalcOptimalLOD() const;
 
-	/**
-	 * @brief The function to allocate render targets.
-	 * @param RequiredRTs The number of render targets to allocate.
-	 */
 	inline void AllocateRenderTargets(const int32 RequiredRTs);
 
 	/**
-	 * The flag to specify whether the render target needs to be updated.
+	 * The flag to indicate whether the mask layout needs to be resolved again.
 	 */
 	bool bDirty = true;
 
 public:
 	// UObject interface
 	#if WITH_EDITOR
-	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent);
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	#endif
 	// End of UObject interface
 

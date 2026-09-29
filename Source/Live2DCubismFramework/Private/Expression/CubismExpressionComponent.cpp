@@ -9,6 +9,8 @@
 #include "Expression/CubismExpressionComponent.h"
 
 #include "CubismUpdateExecutionOrder.h"
+#include "CubismUpdateControllerComponent.h"
+
 #include "Expression/CubismExpression.h"
 #include "Model/CubismParameterComponent.h"
 #include "Model/CubismPartComponent.h"
@@ -17,6 +19,8 @@
 #include "CubismLog.h"
 
 UCubismExpressionComponent::UCubismExpressionComponent()
+	: Time(0.0f)
+	, bWasPlaying(false)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
@@ -27,23 +31,26 @@ void UCubismExpressionComponent::Setup(UCubismModelComponent* InModel)
 {
 	if (!InModel)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("CubismExpressionComponent::Setup - InModel is null. Skipping setup."));
 		return;
 	}
 
-	check(InModel);
-
-	if (Model != InModel)
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
 	{
-		Model = InModel;
+		return;
 	}
+
+	Model = InModel;
+
+	UCubismUpdateControllerComponent::RequestRefresh(this);
 
 	Time = 0.0f;
 	ExpressionQueue.Empty();
+	ParameterValues.Empty();
+	bWasPlaying = false;
 
 	if (Model->Expression != this)
 	{
-		if (Model->Expression)
+		if (IsValid(Model->Expression))
 		{
 			Model->Expression->DestroyComponent();
 		}
@@ -53,20 +60,35 @@ void UCubismExpressionComponent::Setup(UCubismModelComponent* InModel)
 	Model->AddTickPrerequisiteComponent(this); // model ticks after parameters are updated by components
 }
 
+bool UCubismExpressionComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
+}
+
 void UCubismExpressionComponent::PlayExpression(const int32 InIndex)
 {
 	if (!Jsons.IsValidIndex(InIndex))
 	{
-		UE_LOG(LogCubism, Warning, TEXT("Expression cannot be played. Index is out of range."));
+		UE_LOG(LogCubism, Warning, TEXT("Expression cannot be played. Index %d is out of range."), InIndex);
 
 		return;
 	}
 
 	const TObjectPtr<UCubismExp3Json>& Json = Jsons[InIndex];
 
+	if (!Json)
+	{
+		UE_LOG(LogCubism, Warning, TEXT("Expression cannot be played. The expression asset at index %d is not set."), InIndex);
+
+		return;
+	}
+
 	for (const TSharedPtr<FCubismExpression>& Expression : ExpressionQueue)
 	{
-		Expression->StartFadeout(Time);
+		if (Expression.IsValid())
+		{
+			Expression->StartFadeout(Time);
+		}
 	}
 
 	TSharedPtr<FCubismExpression> NextExpression = MakeShared<FCubismExpression>(Json);
@@ -79,37 +101,41 @@ void UCubismExpressionComponent::StopAllExpressions(const bool bForce)
 	if (bForce)
 	{
 		ExpressionQueue.Empty();
+		ParameterValues.Empty();
 	}
 	else
 	{
 		for (const TSharedPtr<FCubismExpression>& Expression : ExpressionQueue)
 		{
-			Expression->StartFadeout(Time);
+			if (Expression.IsValid())
+			{
+				Expression->StartFadeout(Time);
+			}
 		}
 	}
 }
+
+bool UCubismExpressionComponent::IsPlaying() const
+{
+	return ExpressionQueue.Num() > 0;
+}
+
+TObjectPtr<UCubismModelComponent> UCubismExpressionComponent::GetModel()
+{
+	return UCubismModelComponent::FindModelComponent(this);
+}
+
 
 // UObject interface
 void UCubismExpressionComponent::PostLoad()
 {
 	Super::PostLoad();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	if (!Owner || !Owner->Model)
+	if (ModelComp)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("No Owner or Model."));
-		return;
-	}
-	Setup(Owner->Model);
-
-	if (Index >= 0 && Jsons.IsValidIndex(Index))
-	{
-		PlayExpression(Index);
-	}
-	else
-	{
-		UE_LOG(LogTemp, Warning, TEXT("CubismExpressionComponent: Expression not assigned (index %d)"), Index);
+		Setup(ModelComp);
 	}
 }
 
@@ -140,26 +166,41 @@ void UCubismExpressionComponent::OnComponentCreated()
 {
 	Super::OnComponentCreated();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	if (!Owner)
+	if (ModelComp)
 	{
-		return;
+		Setup(ModelComp);
+	}
+}
+
+void UCubismExpressionComponent::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (!IsValid(Model))
+	{
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
 	}
 
-	if (!Owner->Model)
+	// Expressions started in the editor are not carried into the game, start the configured one.
+	if (ExpressionQueue.Num() == 0 && Jsons.IsValidIndex(Index) && Jsons[Index])
 	{
-		return;
+		PlayExpression(Index);
 	}
-	Setup(Owner->Model);
 }
 
 void UCubismExpressionComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
 {
-	if (Model && Model->Expression == this)
+	if (IsValid(Model) && Model->Expression == this)
 	{
 		Model->Expression = nullptr;
 	}
+
+	ExpressionQueue.Empty();
 
 	Super::OnComponentDestroyed(bDestroyingHierarchy);
 }
@@ -169,17 +210,10 @@ void UCubismExpressionComponent::PostEditUndo()
 {
 	Super::PostEditUndo();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
-	if (!Owner)
+	if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
 }
 #endif
 
@@ -187,40 +221,60 @@ void UCubismExpressionComponent::TickComponent(float DeltaTime, ELevelTick TickT
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (IsControlledByUpdateController())
+	// When an update controller drives this actor it calls OnCubismUpdate in execution order instead.
+	if (IsControlledByUpdateController() && UCubismUpdateControllerComponent::FindController(this))
 	{
 		return;
 	}
 
-	if (!Model)
+	OnCubismUpdate(DeltaTime);
+}
+
+int32 UCubismExpressionComponent::GetExecutionOrder() const
+{
+	return CUBISM_EXECUTION_ORDER_EXPRESSION;
+}
+
+void UCubismExpressionComponent::OnCubismUpdate(float DeltaTime)
+{
+	if (!IsValid(Model))
+	{
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel())
 	{
 		return;
 	}
 
 	Time += DeltaTime;
 
-	if (!Model)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("Model is null."));
-		return;
-	}
-
 	float ExpressionWeight = 0.0f;
 
 	for (int32 ExpressionIndex = 0; ExpressionIndex < ExpressionQueue.Num(); ExpressionIndex++)
 	{
 		const TSharedPtr<FCubismExpression>& Expression = ExpressionQueue[ExpressionIndex];
-			
+
+		if (!Expression.IsValid())
+		{
+			continue;
+		}
+
 		UpdateExpression(ExpressionIndex, Expression);
 
 		ExpressionWeight += Expression->CalcExpressionWeight(Time);
 	}
 
+	// Once the latest expression is fully faded in, the older ones no longer contribute.
 	if (ExpressionQueue.Num() > 1)
 	{
 		const TSharedPtr<FCubismExpression>& LatestExpression = ExpressionQueue.Last();
 
-		if (LatestExpression->FadeWeight >= 1.0f)
+		if (LatestExpression.IsValid() && LatestExpression->FadeWeight >= 1.0f)
 		{
 			for (int32 i = ExpressionQueue.Num()-2; i >= 0; i--)
 			{
@@ -229,9 +283,30 @@ void UCubismExpressionComponent::TickComponent(float DeltaTime, ELevelTick TickT
 		}
 	}
 
-	if (ExpressionQueue.Num() == 0)
+	// Drop the expressions that finished fading out.
+	for (int32 i = ExpressionQueue.Num() - 1; i >= 0; i--)
+	{
+		if (!ExpressionQueue[i].IsValid() || ExpressionQueue[i]->IsFinished(Time))
+		{
+			ExpressionQueue.RemoveAt(i);
+		}
+	}
+
+	const bool bIsPlaying = ExpressionQueue.Num() > 0;
+
+	// Only notify on the transition from playing to finished, not every idle frame.
+	if (bWasPlaying && !bIsPlaying)
 	{
 		OnExpressionPlaybackFinished.Broadcast();
+	}
+
+	bWasPlaying = bIsPlaying;
+
+	if (!bIsPlaying)
+	{
+		ParameterValues.Empty();
+
+		return;
 	}
 
 	const float Weight = FMath::Min(ExpressionWeight, 1.0f);
@@ -239,6 +314,11 @@ void UCubismExpressionComponent::TickComponent(float DeltaTime, ELevelTick TickT
 	for (FCubismExpressionParameterValue& ParameterValue : ParameterValues)
 	{
 		UCubismParameterComponent* DstParameter = Model->GetParameter(ParameterValue.Id);
+
+		if (!DstParameter)
+		{
+			continue;
+		}
 
 		const float Value = (ParameterValue.OverwriteValue + ParameterValue.AdditiveValue) * ParameterValue.MultiplyValue;
 
@@ -290,21 +370,22 @@ void UCubismExpressionComponent::UpdateExpression(const int32 ExpressionIndex, c
 		Expression->Init(Time);
 	}
 
-	const float ElapsedTime = Time - Expression->StartTime;
-	const float FadeWeight = Expression->UpdateWeight(ElapsedTime);
+	const float FadeWeight = Expression->UpdateWeight(Time);
 
 	for (FCubismExpressionParameterValue& ParameterValue : ParameterValues)
 	{
-		if (!Expression->Parameters.IsValidIndex(ParameterValue.Index))
+		const UCubismParameterComponent* DstParameter = Model->GetParameter(ParameterValue.Id);
+
+		if (!DstParameter)
 		{
 			continue;
 		}
 
 		float NewAdditiveValue = 0.0f;
 		float NewMultiplyValue = 1.0f;
-		float NewOverwriteValue = Model->GetParameter(ParameterValue.Id)->Value;
+		float NewOverwriteValue = DstParameter->Value;
 
-		const FCubismExpressionParameter& Parameter = Expression->Parameters[ParameterValue.Index];
+		// Find the parameter in this expression; it may not be part of it.
 		int32 ParameterIndex = -1;
 
 		for (int32 i = 0; i < Expression->Parameters.Num(); ++i)
@@ -341,6 +422,8 @@ void UCubismExpressionComponent::UpdateExpression(const int32 ExpressionIndex, c
 			}
 			continue;
 		}
+
+		const FCubismExpressionParameter& Parameter = Expression->Parameters[ParameterIndex];
 
 		switch (Parameter.Blend)
 		{
@@ -388,63 +471,4 @@ void UCubismExpressionComponent::UpdateExpression(const int32 ExpressionIndex, c
 float UCubismExpressionComponent::CalculateValue(float Source, float Destination, float FadeWeight)
 {
 	return (Source * (1.0f - FadeWeight)) + (Destination * FadeWeight);
-}
-
-int32 UCubismExpressionComponent::GetExecutionOrder() const
-{
-	return CUBISM_EXECUTION_ORDER_EXPRESSION;
-}
-
-void UCubismExpressionComponent::OnCubismUpdate(float DeltaTime)
-{
-	if (!Model)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("Model is null."));
-		return;
-	}
-
-	Time += DeltaTime;
-
-	float ExpressionWeight = 0.0f;
-
-	for (int32 ExpressionIndex = 0; ExpressionIndex < ExpressionQueue.Num(); ExpressionIndex++)
-	{
-		const TSharedPtr<FCubismExpression>& Expression = ExpressionQueue[ExpressionIndex];
-
-		UpdateExpression(ExpressionIndex, Expression);
-
-		ExpressionWeight += Expression->CalcExpressionWeight(Time);
-	}
-
-	if (ExpressionQueue.Num() > 1)
-	{
-		const TSharedPtr<FCubismExpression>& LatestExpression = ExpressionQueue.Last();
-
-		if (LatestExpression->FadeWeight >= 1.0f)
-		{
-			for (int32 i = ExpressionQueue.Num() - 2; i >= 0; i--)
-			{
-				ExpressionQueue.RemoveAt(i);
-			}
-		}
-	}
-
-	if (ExpressionQueue.Num() == 0)
-	{
-		OnExpressionPlaybackFinished.Broadcast();
-	}
-
-	const float Weight = FMath::Min(ExpressionWeight, 1.0f);
-
-	for (FCubismExpressionParameterValue& ParameterValue : ParameterValues)
-	{
-		UCubismParameterComponent* DstParameter = Model->GetParameter(ParameterValue.Id);
-
-		const float Value = (ParameterValue.OverwriteValue + ParameterValue.AdditiveValue) * ParameterValue.MultiplyValue;
-
-		DstParameter->SetParameterValue(Value, Weight);
-
-		ParameterValue.AdditiveValue = 0.0f;
-		ParameterValue.MultiplyValue = 1.0f;
-	}
 }

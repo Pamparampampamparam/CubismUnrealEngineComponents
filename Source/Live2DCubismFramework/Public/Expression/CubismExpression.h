@@ -78,17 +78,28 @@ public:
 	float CalcExpressionWeight(const float Time) const;
 
 	/**
-	 * The function to calculate the weight of the fade in/out.
-	 * @param Time The current time.
+	 * The function to calculate and store the weight of the fade in/out.
+	 * @param Time The current time (absolute time of the component).
 	 * @return The weight of the fade in and the fade in/out.
 	 */
-	float UpdateWeight(const float ElapsedTime);
+	float UpdateWeight(const float Time);
 
 	/**
 	 * The function to fade out the expression.
 	 * @param Time The start time of the fade out.
 	 */
 	void StartFadeout(const float Time);
+
+	/**
+	 * Whether a fade out has been requested.
+	 */
+	bool IsFadingOut() const;
+
+	/**
+	 * Whether the expression has finished fading out at the given time.
+	 * @param Time The current time (absolute time of the component).
+	 */
+	bool IsFinished(const float Time) const;
 
 private:
 	friend class UCubismExpressionComponent;

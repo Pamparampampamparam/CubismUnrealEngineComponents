@@ -9,6 +9,8 @@
 #pragma once
 
 #include "Expression/CubismExp3Json.h"
+
+#include "Components/ActorComponent.h"
 #include "CubismUpdatableInterface.h"
 #include "CubismExpressionComponent.generated.h"
 
@@ -54,7 +56,7 @@ struct LIVE2DCUBISMFRAMEWORK_API FCubismExpressionParameterValue
 /**
  * A component to apply the expression motion to the specified parameters of the Cubism model.
  */
-UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
+UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class LIVE2DCUBISMFRAMEWORK_API UCubismExpressionComponent : public UActorComponent, public ICubismUpdatableInterface
 {
 	GENERATED_BODY()
@@ -102,19 +104,21 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void StopAllExpressions(const bool bForce = false);
 
+	/**
+	 * @brief Whether any expression is queued or playing.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	bool IsPlaying() const;
+
 	// ICubismUpdatableInterface
 	virtual bool IsControlledByUpdateController() const override { return true; }
 	virtual int32 GetExecutionOrder() const override;
 	virtual void OnCubismUpdate(float DeltaTime) override;
 
-private:
-	friend class UCubismModelComponent;
-
 	/**
-	 * The model component that the component depends on.
+	 * @brief Whether the component is bound to a model that is ready to be queried.
 	 */
-	UPROPERTY()
-	TObjectPtr<UCubismModelComponent> Model;
+	bool HasValidModel() const;
 
 private:
 	/**
@@ -122,10 +126,24 @@ private:
 	 */
 	UCubismExpressionComponent();
 
+	TObjectPtr<UCubismModelComponent> GetModel();
+
+	/**
+	 * The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
+	 */
+	UPROPERTY(Transient, DuplicateTransient)
+	TObjectPtr<UCubismModelComponent> Model;
+
 	/**
 	 * The internal time of the component.
 	 */
 	float Time;
+
+	/**
+	 * Whether an expression was playing during the previous tick (used to fire the finished delegate once).
+	 */
+	bool bWasPlaying;
 
 	/**
 	 * The queue of the expression motion to play.
@@ -156,13 +174,14 @@ public:
 	// UObject interface
 	virtual void PostLoad() override;
 
-#if WITH_EDITORONLY_DATA
+#if WITH_EDITOR
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	// End of UObject interface
 
 	// UActorComponent interface
 	virtual void OnComponentCreated() override;
+	virtual void BeginPlay() override;
 	virtual void OnComponentDestroyed(bool bDestroyingHierarchy) override;
 
 #if WITH_EDITOR

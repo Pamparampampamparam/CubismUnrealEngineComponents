@@ -9,9 +9,9 @@
 #pragma once
 
 #include "Motion/CubismMotion3Json.h"
-#include "CubismUpdatableInterface.h"
-#include "Components/ActorComponent.h"
 
+#include "Components/ActorComponent.h"
+#include "CubismUpdatableInterface.h"
 #include "CubismMotionComponent.generated.h"
 
 class UCubismModelComponent;
@@ -34,7 +34,7 @@ enum class ECubismMotionPriority : uint8
 /**
  * A component to apply the motion to the specified parameters of the Cubism model.
  */
-UCLASS( ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
+UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class LIVE2DCUBISMFRAMEWORK_API UCubismMotionComponent : public UActorComponent, public ICubismUpdatableInterface
 {
 	GENERATED_BODY()
@@ -73,15 +73,16 @@ public:
 	ECubismMotionPriority ReservedPriority = ECubismMotionPriority::None;
 
 	/**
+	 * If true, the motion at `Index` (or the first one if `Index` is invalid) is played with idle priority on BeginPlay.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
+	bool bAutoPlay = true;
+
+	/**
 	 * The delegate to be called when the motion playback is finished.
 	 */
 	UPROPERTY(BlueprintAssignable, Category = "Live2D Cubism")
 	FCubismMotionPlaybackFinishedHandler OnMotionPlaybackFinished;
-
-	// ICubismUpdatableInterface
-	virtual bool IsControlledByUpdateController() const override { return true; }
-	virtual int32 GetExecutionOrder() const override;
-	virtual void OnCubismUpdate(float DeltaTime) override;
 
 public:
 	/**
@@ -123,14 +124,21 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void StopAllMotions(const bool bForce = false);
 
-private:
-	friend class UCubismModelComponent;
+	/**
+	 * @brief Whether any motion is queued or playing.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	bool IsPlaying() const;
+
+	// ICubismUpdatableInterface
+	virtual bool IsControlledByUpdateController() const override { return true; }
+	virtual int32 GetExecutionOrder() const override;
+	virtual void OnCubismUpdate(float DeltaTime) override;
 
 	/**
-	 * The model component that the component depends on.
+	 * @brief Whether the component is bound to a model that is ready to be queried.
 	 */
-	UPROPERTY()
-	TObjectPtr<UCubismModelComponent> Model;
+	bool HasValidModel() const;
 
 private:
 	/**
@@ -138,10 +146,24 @@ private:
 	 */
 	UCubismMotionComponent();
 
+	TObjectPtr<UCubismModelComponent> GetModel();
+
+	/**
+	 * The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
+	 */
+	UPROPERTY(Transient, DuplicateTransient)
+	TObjectPtr<UCubismModelComponent> Model;
+
 	/**
 	 * The internal time of the component.
 	 */
 	float Time;
+
+	/**
+	 * Whether a motion was playing during the previous tick (used to fire the finished delegate once).
+	 */
+	bool bWasPlaying;
 
 	/**
 	 * The queue of the motion to play.
@@ -158,13 +180,14 @@ public:
 	// UObject interface
 	virtual void PostLoad() override;
 
-#if WITH_EDITORONLY_DATA
+#if WITH_EDITOR
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	// End of UObject interface
 
 	// UActorComponent interface
 	virtual void OnComponentCreated() override;
+	virtual void BeginPlay() override;
 	virtual void OnComponentDestroyed(bool bDestroyingHierarchy) override;
 
 #if WITH_EDITOR

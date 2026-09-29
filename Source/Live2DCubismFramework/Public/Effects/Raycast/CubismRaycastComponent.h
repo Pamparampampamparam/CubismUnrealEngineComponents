@@ -7,9 +7,11 @@
 
 
 #pragma once
-#include "CubismUpdatableInterface.h"
+
 #include "Effects/Raycast/CubismRaycastParameter.h"
+
 #include "Components/ActorComponent.h"
+#include "CubismUpdatableInterface.h"
 #include "CubismRaycastComponent.generated.h"
 
 class UCubismModelComponent;
@@ -29,25 +31,25 @@ public:
 	 * The Drawable that the ray hit.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
-	TObjectPtr<UCubismDrawableComponent> Drawable;
+    TObjectPtr<UCubismDrawableComponent> Drawable;
 
 	/** 
 	 * The distance from the ray origin to the hit point.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
-	float Distance = INFINITY;
+    float Distance = INFINITY;
 
 	/**
 	 * The global position of the hit point.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
-	FVector GlobalPosition = FVector::ZeroVector;
+    FVector GlobalPosition = FVector::ZeroVector;
 
 	/**
 	 * The local position of the hit point.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
-	FVector LocalPosition = FVector::ZeroVector;
+    FVector LocalPosition = FVector::ZeroVector;
 };
 
 /**
@@ -71,11 +73,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
 	TArray<FCubismRaycastParameter> Parameters;
 
-	// ICubismUpdatableInterface implementation
-	virtual bool IsControlledByUpdateController() const override { return true; }
-	virtual int32 GetExecutionOrder() const override;
-	virtual void OnCubismUpdate(float DeltaTime) override;
-
 public:
 	/**
 	 * @brief The function to set up the component.
@@ -95,20 +92,30 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void Raycast(const FVector Origin, const FVector Direction, TArray<FCubismRaycastHit>& Result, const float Length = 10000.0f) const;
 
-private:
-	friend class UCubismModelComponent;
+	// ICubismUpdatableInterface
+	virtual bool IsControlledByUpdateController() const override { return true; }
+	virtual int32 GetExecutionOrder() const override;
+	virtual void OnCubismUpdate(float DeltaTime) override;
 
 	/**
-	 * The model component that the component depends on.
+	 * @brief Whether the component is bound to a model that is ready to be queried.
 	 */
-	UPROPERTY()
-	TObjectPtr<UCubismModelComponent> Model;
+	bool HasValidModel() const;
 
 private:
 	/**
 	 * @brief The constructor of the component.
 	 */
 	UCubismRaycastComponent();
+
+	TObjectPtr<UCubismModelComponent> GetModel();
+
+	/**
+	 * The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
+	 */
+	UPROPERTY(Transient, DuplicateTransient)
+	TObjectPtr<UCubismModelComponent> Model;
 
 	/**
 	 * @brief The function to perform the raycast on the drawable.
@@ -167,11 +174,15 @@ private:
 public:
 	// UObject interface
 	virtual void PostLoad() override;
+
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 	// End of UObject interface
 
 	// UActorComponent interface
 	virtual void OnComponentCreated() override;
-	virtual void OnComponentDestroyed(bool bDestroyingHierarchy) override;
+	virtual void OnRegister() override;
 
 #if WITH_EDITOR
 	virtual void PostEditUndo() override;

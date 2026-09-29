@@ -9,6 +9,7 @@
 #include "Effects/Raycast/CubismRaycastComponent.h"
 
 #include "CubismUpdateExecutionOrder.h"
+
 #include "Effects/Raycast/CubismRaycastParameter.h"
 #include "Model/CubismModelActor.h"
 #include "Model/CubismModelComponent.h"
@@ -23,16 +24,15 @@ void UCubismRaycastComponent::Setup(UCubismModelComponent* InModel)
 {
 	if (!InModel)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("CubismRaycastComponent::Setup - InModel is null. Skipping setup."));
 		return;
 	}
 
-	check(InModel);
-
-	if (Model != InModel)
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
 	{
-		Model = InModel;
+		return;
 	}
+
+	Model = InModel;
 
 	if (Json)
 	{
@@ -49,15 +49,11 @@ void UCubismRaycastComponent::Setup(UCubismModelComponent* InModel)
 			Parameters.Add(Parameter);
 		}
 	}
+}
 
-	if (Model->Raycast != this)
-	{
-		if (Model->Raycast)
-		{
-			Model->Raycast->DestroyComponent();
-		}
-		Model->Raycast = this;
-	}
+bool UCubismRaycastComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
 }
 
 void UCubismRaycastComponent::Raycast(
@@ -69,7 +65,7 @@ void UCubismRaycastComponent::Raycast(
 {
 	Result.Empty();
 
-	if (!Model)
+	if (!HasValidModel())
 	{
 		return;
 	}
@@ -85,7 +81,7 @@ void UCubismRaycastComponent::Raycast(
 
 		UCubismDrawableComponent* Drawable = Model->GetDrawable(Parameter.Id);
 
-		if (!Drawable)
+		if (!IsValid(Drawable))
 		{
 			continue;
 		}
@@ -148,7 +144,7 @@ bool UCubismRaycastComponent::RaycastDrawable(
 			TArray<FVector> Positions;
 			for (const FVector2D& Position : Drawable->GetVertexPositions())
 			{
-				Positions.Add(Model->GetRelativeTransform().TransformPosition(Drawable->ToGlobalPosition(Position)));
+				Positions.Add(Transform.TransformPosition(Drawable->ToGlobalPosition(Position)));
 			}
 
 			if (!RayIntersectMesh(
@@ -179,8 +175,13 @@ bool UCubismRaycastComponent::RayIntersectMesh
 	FVector& HitPosition, float& HitTime
 )
 {
-	for (int32 i = 0; i < Indices.Num(); i += 3)
+	for (int32 i = 0; i + 2 < Indices.Num(); i += 3)
 	{
+		if (!Positions.IsValidIndex(Indices[i]) || !Positions.IsValidIndex(Indices[i + 1]) || !Positions.IsValidIndex(Indices[i + 2]))
+		{
+			continue;
+		}
+
 		const FVector T0 = Positions[Indices[i    ]];
 		const FVector T1 = Positions[Indices[i + 1]];
 		const FVector T2 = Positions[Indices[i + 2]];
@@ -233,6 +234,11 @@ bool UCubismRaycastComponent::RayIntersectTriangle
 
 	const float W = (E2 | Q) * InvDet;
 
+	if (Length <= 0.0f)
+	{
+		return false;
+	}
+
 	HitTime = W / Length;
 
 	if (HitTime < 0.0f || HitTime > 1.0f)
@@ -245,20 +251,42 @@ bool UCubismRaycastComponent::RayIntersectTriangle
 	return true;
 }
 
+TObjectPtr<UCubismModelComponent> UCubismRaycastComponent::GetModel()
+{
+	return UCubismModelComponent::FindModelComponent(this);
+}
+
 // UObject interface
 void UCubismRaycastComponent::PostLoad()
 {
 	Super::PostLoad();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
-	if (!Owner || !Owner->Model)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("No Owner or Model."));
-		return;
-	}
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	Setup(Owner->Model);
+	if (ModelComp)
+	{
+		Setup(ModelComp);
+	}
 }
+
+#if WITH_EDITOR
+void UCubismRaycastComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	const FName PropertyName = PropertyChangedEvent.GetPropertyName();
+
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismRaycastComponent, Json))
+	{
+		const TObjectPtr<UCubismModelComponent> ModelComp = IsValid(Model) ? Model : GetModel();
+
+		if (ModelComp)
+		{
+			Setup(ModelComp);
+		}
+	}
+}
+#endif
 // End of UObject interface
 
 // UActorComponent interface
@@ -266,52 +294,42 @@ void UCubismRaycastComponent::OnComponentCreated()
 {
 	Super::OnComponentCreated();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	if (!Owner)
+	if (ModelComp)
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
 }
 
-void UCubismRaycastComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
+void UCubismRaycastComponent::OnRegister()
 {
-	if (Model && Model->Raycast == this)
+	Super::OnRegister();
+
+	// The model may have been created after this component (e.g. Blueprint construction order).
+	if (!IsValid(Model))
 	{
-		Model->Raycast = nullptr;
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
 	}
-
-	Super::OnComponentDestroyed(bDestroyingHierarchy);
 }
-
 #if WITH_EDITOR
 void UCubismRaycastComponent::PostEditUndo()
 {
 	Super::PostEditUndo();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
-
-	if (!Owner)
+	if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
 }
 #endif
 
 void UCubismRaycastComponent::OnCubismUpdate(float DeltaTime)
 {
+	// Raycasts are performed on demand; nothing to update per frame.
 }
 
 int32 UCubismRaycastComponent::GetExecutionOrder() const

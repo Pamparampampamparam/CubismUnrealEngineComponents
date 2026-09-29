@@ -128,14 +128,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void OverrideValue(float InValue, float Weight = 1.0f);
 
-private:
-	friend class UCubismModelComponent;
-
 	/**
-	 * The model component that the component depends on.
+	 * @brief Whether the component is bound to a model that is ready to be queried.
 	 */
-	UPROPERTY()
-	TObjectPtr<UCubismModelComponent> Model;
+	bool HasValidModel() const;
 
 private:
 	/**
@@ -143,12 +139,22 @@ private:
 	 */
 	UCubismParameterComponent();
 
+
+	TObjectPtr<UCubismModelComponent> GetModel();
+
+	/**
+	 * The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
+	 */
+	UPROPERTY(Transient, DuplicateTransient)
+	TObjectPtr<UCubismModelComponent> Model;
+
 public:
 	// UObject interface
 	virtual void PostLoad() override;
 
-#if WITH_EDITORONLY_DATA
-	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	// End of UObject interface
 

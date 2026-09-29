@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "Runtime/Launch/Resources/Version.h"
 #include "PrimitiveSceneProxy.h"
 #include "SceneManagement.h"
 #include "SceneView.h"

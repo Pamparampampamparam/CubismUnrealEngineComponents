@@ -44,8 +44,6 @@ void FLive2DCubismFrameworkModule::StartupModule()
 
 void FLive2DCubismFrameworkModule::ShutdownModule()
 {
-	check(bIsModuleStarted);
-
 	if (!bIsModuleStarted)
 	{
 		UE_LOG(LogCubism, Log, TEXT("FLive2DCubismFrameworkModule is not started yet."));

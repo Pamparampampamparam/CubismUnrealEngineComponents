@@ -9,6 +9,8 @@
 #pragma once
 
 #include "Model/CubismModelComponent.h"
+
+#include "Components/ActorComponent.h"
 #include "CubismUpdatableInterface.h"
 #include "CubismLipSyncComponent.generated.h"
 
@@ -73,11 +75,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
 	TObjectPtr<USoundWave> Source;
 
-	// ICubismUpdatableInterface implementation
-	virtual bool IsControlledByUpdateController() const override { return true; }
-	virtual int32 GetExecutionOrder() const override;
-	virtual void OnCubismUpdate(float DeltaTime) override;
-
 public:
 	/**
 	 * @brief The function to set up the component.
@@ -92,6 +89,16 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	UAudioComponent* GetAudioComponent();
+
+	// ICubismUpdatableInterface
+	virtual bool IsControlledByUpdateController() const override { return true; }
+	virtual int32 GetExecutionOrder() const override;
+	virtual void OnCubismUpdate(float DeltaTime) override;
+
+	/**
+	 * @brief Whether the component is bound to a model that is ready to be queried.
+	 */
+	bool HasValidModel() const;
 
 protected:
 	/**
@@ -109,19 +116,24 @@ protected:
 	TObjectPtr<UAudioComponent> CreateAudioComponent();
 
 private:
-	friend class UCubismModelComponent;
-
-	/**
-	 * The model component that the component depends on.
-	 */
-	UPROPERTY()
-	TObjectPtr<UCubismModelComponent> Model;
-
-private:
 	/**
 	 * @brief The constructor of the component.
 	 */
 	UCubismLipSyncComponent();
+
+	TObjectPtr<UCubismModelComponent> GetModel();
+
+	/**
+	 * @brief Applies the current value to the target parameters.
+	 */
+	void ApplyValue();
+
+	/**
+	 * The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
+	 */
+	UPROPERTY(Transient, DuplicateTransient)
+	TObjectPtr<UCubismModelComponent> Model;
 
 	/**
 	 * The internal time of the component.
@@ -167,10 +179,10 @@ private:
 
 public:
 	// UObject interface
-	void PostLoad() override;
+	virtual void PostLoad() override;
 
-#if WITH_EDITORONLY_DATA
-	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	// End of UObject interface
 

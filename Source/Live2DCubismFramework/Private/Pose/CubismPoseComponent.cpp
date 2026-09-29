@@ -9,11 +9,12 @@
 #include "Pose/CubismPoseComponent.h"
 
 #include "CubismUpdateExecutionOrder.h"
+#include "CubismUpdateControllerComponent.h"
+
 #include "Model/CubismModelComponent.h"
 #include "Model/CubismParameterComponent.h"
 #include "Model/CubismPartComponent.h"
 #include "Model/CubismModelActor.h"
-#include "Model/CubismModelComponent.h"
 #include "Model/CubismParameterStoreComponent.h"
 #include "Motion/CubismMotionComponent.h"
 #include "Pose/CubismPose3Json.h"
@@ -25,6 +26,7 @@ const float Phi = 0.5f;
 const float BackOpacityThreshold = 0.15f;
 
 UCubismPoseComponent::UCubismPoseComponent()
+	: FadeInTime(DefaultFadeInSeconds)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
@@ -35,26 +37,25 @@ void UCubismPoseComponent::Setup(UCubismModelComponent* InModel)
 {
 	if (!InModel)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("CubismPoseComponent::Setup - InModel is null. Skipping setup."));
 		return;
 	}
 
-	check(InModel);
-
-	if (Model != InModel)
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
 	{
-		Model = InModel;
+		return;
 	}
 
-	FadeInTime = DefaultFadeInSeconds;
+	Model = InModel;
+
+	UCubismUpdateControllerComponent::RequestRefresh(this);
+
+	PartGroups.Empty();
 
 	if (Json)
 	{
-		PartGroups.Empty();
-
 		FadeInTime = Json->FadeInTime;
 
-		if (FadeInTime < 0.0f)
+		if (FadeInTime <= 0.0f)
 		{
 			FadeInTime = DefaultFadeInSeconds;
 		}
@@ -70,9 +71,14 @@ void UCubismPoseComponent::Setup(UCubismModelComponent* InModel)
 				PartParam.Part = Model->GetPart(Part.Id);
 				PartParam.Parameter = Model->GetParameter(Part.Id);
 
+				if (!PartParam.Part.IsValid() || !PartParam.Parameter.IsValid())
+				{
+					continue;
+				}
+
 				for (const FString& LinkId : Part.Links)
 				{
-					if (const TObjectPtr<UCubismPartComponent>& LinkPart = Model->GetPart(LinkId))
+					if (UCubismPartComponent* LinkPart = Model->GetPart(LinkId))
 					{
 						PartParam.LinkParts.Add(LinkPart);
 					}
@@ -81,26 +87,41 @@ void UCubismPoseComponent::Setup(UCubismModelComponent* InModel)
 				Group.Parts.Add(PartParam);
 			}
 
-			PartGroups.Add(Group);
+			if (Group.Parts.Num() > 0)
+			{
+				PartGroups.Add(Group);
+			}
 		}
 	}
 
 	if (Model->Pose != this)
 	{
-		if (Model->Pose)
+		if (IsValid(Model->Pose))
 		{
 			Model->Pose->DestroyComponent();
 		}
 		Model->Pose = this;
 	}
-	if (Model && Model->ParameterStore)
+
+	if (IsValid(Model->ParameterStore))
 	{
 		AddTickPrerequisiteComponent(Model->ParameterStore); // must be updated after parameters loaded
 	}
-	if (Model && Model->Motion)
+
+	if (IsValid(Model->Motion))
 	{
 		AddTickPrerequisiteComponent(Model->Motion); // must be updated at first because motions overwrite parameters
 	}
+}
+
+bool UCubismPoseComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
+}
+
+TObjectPtr<UCubismModelComponent> UCubismPoseComponent::GetModel()
+{
+	return UCubismModelComponent::FindModelComponent(this);
 }
 
 // UObject interface
@@ -108,14 +129,12 @@ void UCubismPoseComponent::PostLoad()
 {
 	Super::PostLoad();
 
-	ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
-	if (!Owner || !Owner->Model)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("No Owner or Model."));
-		return;
-	}
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	Setup(Owner->Model);
+	if (ModelComp)
+	{
+		Setup(ModelComp);
+	}
 }
 
 #if WITH_EDITOR
@@ -127,42 +146,11 @@ void UCubismPoseComponent::PostEditChangeProperty(struct FPropertyChangedEvent& 
 
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismPoseComponent, Json))
 	{
-		Setup(Model);
-	}
+		const TObjectPtr<UCubismModelComponent> ModelComp = IsValid(Model) ? Model : GetModel();
 
-	const FName PosePropertyName = PropertyChangedEvent.GetPropertyName();
-
-	if (PosePropertyName == GET_MEMBER_NAME_CHECKED(UCubismPoseComponent, bEnablePoseInEditor))
-	{
-		if (GetWorld() && GetWorld()->WorldType == EWorldType::Editor)
+		if (ModelComp)
 		{
-			SetComponentTickEnabled(bEnablePoseInEditor);
-
-			if (!bEnablePoseInEditor && Model)
-			{
-				for (const FCubismPosePartGroupParameter& Group : PartGroups)
-				{
-					for (const FCubismPosePartParameter& PartParam : Group.Parts)
-					{
-						if (PartParam.Parameter)
-						{
-							PartParam.Parameter->SetParameterValue(1.0f);
-						}
-					}
-				}
-
-				for (const FCubismPosePartGroupParameter& Group : PartGroups)
-				{
-					for (const FCubismPosePartParameter& PartParam : Group.Parts)
-					{
-						if (PartParam.Part)
-						{
-							PartParam.Part->SetPartOpacity(1.0f);
-							Model->ParameterStore->SavePartOpacity(PartParam.Part->Index);
-						}
-					}
-				}
-			}
+			Setup(ModelComp);
 		}
 	}
 }
@@ -174,77 +162,49 @@ void UCubismPoseComponent::OnComponentCreated()
 {
 	Super::OnComponentCreated();
 
-	ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	if (!Owner)
+	if (ModelComp)
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
-
-#if WITH_EDITOR
-	if (GetWorld() && GetWorld()->WorldType == EWorldType::Editor)
-	{
-		SetComponentTickEnabled(bEnablePoseInEditor);
-	}
-#endif
 }
 
 void UCubismPoseComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
 {
-	if (Model && Model->Pose == this)
+	if (IsValid(Model) && Model->Pose == this)
 	{
 		Model->Pose = nullptr;
 	}
 
+	PartGroups.Empty();
+
 	Super::OnComponentDestroyed(bDestroyingHierarchy);
 }
 
-#if WITH_EDITOR
-void UCubismPoseComponent::PostEditUndo()
-{
-	Super::PostEditUndo();
-
-	ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
-
-	if (!Owner)
-	{
-		return;
-	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
-}
-#endif
-
 void UCubismPoseComponent::DoFade(float DeltaTime)
 {
+	UCubismParameterStoreComponent* ParameterStore = Model->ParameterStore;
+
 	for (const FCubismPosePartGroupParameter& PartGroup : PartGroups)
 	{
-		check(PartGroup.Parts.Num() > 0);
+		if (PartGroup.Parts.Num() == 0)
+		{
+			continue;
+		}
 
 		// default visible part and its opacity
-		TObjectPtr<UCubismPartComponent> VisiblePart = PartGroup.Parts[0].Part;
-
-		check(VisiblePart);
+		UCubismPartComponent* VisiblePart = PartGroup.Parts[0].Part.Get();
 
 		float NewOpacity = 1.0f;
 
 		// find the visible part in a group
 		for (const FCubismPosePartParameter& PartParam : PartGroup.Parts)
 		{
-			const TObjectPtr<UCubismPartComponent>& Part = PartParam.Part;
-			const TObjectPtr<UCubismParameterComponent>& Parameter = PartParam.Parameter;
+			UCubismPartComponent* Part = PartParam.Part.Get();
+			const UCubismParameterComponent* Parameter = PartParam.Parameter.Get();
 
-			if (!Part || !Parameter || !(Parameter->Value > Epsilon))
+			if (!IsValid(Part) || !IsValid(Parameter) || !(Parameter->Value > Epsilon))
 			{
 				continue;
 			}
@@ -258,8 +218,19 @@ void UCubismPoseComponent::DoFade(float DeltaTime)
 			}
 		}
 
-		// FIXME: There is a possibility of division by zero, but the fix will be applied after addressing the issue in other SDKs.
-		NewOpacity += DeltaTime / FadeInTime;
+		if (!IsValid(VisiblePart))
+		{
+			continue;
+		}
+
+		if (FadeInTime > 0.0f)
+		{
+			NewOpacity += DeltaTime / FadeInTime;
+		}
+		else
+		{
+			NewOpacity = 1.0f;
+		}
 
 		if (NewOpacity > 1.0f)
 		{
@@ -268,9 +239,9 @@ void UCubismPoseComponent::DoFade(float DeltaTime)
 
 		for (const FCubismPosePartParameter& PartParam : PartGroup.Parts)
 		{
-			const TObjectPtr<UCubismPartComponent>& Part = PartParam.Part;
+			UCubismPartComponent* Part = PartParam.Part.Get();
 
-			if (!Part)
+			if (!IsValid(Part))
 			{
 				continue;
 			}
@@ -297,7 +268,7 @@ void UCubismPoseComponent::DoFade(float DeltaTime)
 
 				const float BackOpacity = (1.0f - A1) * (1.0f - NewOpacity);
 
-				if (BackOpacity > BackOpacityThreshold)
+				if (BackOpacity > BackOpacityThreshold && NewOpacity < 1.0f)
 				{
 					A1 = 1.0f - BackOpacityThreshold / (1.0f - NewOpacity);
 				}
@@ -310,9 +281,9 @@ void UCubismPoseComponent::DoFade(float DeltaTime)
 				Part->SetPartOpacity(Opacity);
 			}
 
-			if (Model && Model->ParameterStore)
+			if (IsValid(ParameterStore))
 			{
-				Model->ParameterStore->SavePartOpacity(Part->Index);
+				ParameterStore->SavePartOpacity(Part->Index);
 			}
 		}
 	}
@@ -320,55 +291,70 @@ void UCubismPoseComponent::DoFade(float DeltaTime)
 
 void UCubismPoseComponent::CopyPartOpacities()
 {
+	UCubismParameterStoreComponent* ParameterStore = Model->ParameterStore;
+
 	// apply opacity to linked parts
 	for (const FCubismPosePartGroupParameter& PartGroup : PartGroups)
 	{
 		for (const FCubismPosePartParameter& PartParam : PartGroup.Parts)
 		{
-			if (PartParam.LinkParts.Num() == 0)
+			const UCubismPartComponent* Part = PartParam.Part.Get();
+
+			if (PartParam.LinkParts.Num() == 0 || !IsValid(Part))
 			{
 				continue; // no linked parts
 			}
 
-			const float Opacity = PartParam.Part->Opacity;
+			const float Opacity = Part->Opacity;
 
-			for (const TObjectPtr<UCubismPartComponent>& LinkPart : PartParam.LinkParts)
+			for (const TWeakObjectPtr<UCubismPartComponent>& WeakLinkPart : PartParam.LinkParts)
 			{
+				UCubismPartComponent* LinkPart = WeakLinkPart.Get();
+
+				if (!IsValid(LinkPart))
+				{
+					continue;
+				}
+
 				LinkPart->SetPartOpacity(Opacity);
 
-				if (Model && Model->ParameterStore)
+				if (IsValid(ParameterStore))
 				{
-					Model->ParameterStore->SavePartOpacity(LinkPart->Index);
+					ParameterStore->SavePartOpacity(LinkPart->Index);
 				}
 			}
 		}
 	}
 }
 
-void UCubismPoseComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
-{
 #if WITH_EDITOR
-	if (GetWorld() && GetWorld()->WorldType == EWorldType::Editor && !bEnablePoseInEditor)
+void UCubismPoseComponent::PostEditUndo()
+{
+	Super::PostEditUndo();
+
+	if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
 	{
-		return;
+		Setup(ModelComp);
 	}
+}
 #endif
 
+void UCubismPoseComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (IsControlledByUpdateController())
+	// When an update controller drives this actor it calls OnCubismUpdate in execution order instead.
+	if (IsControlledByUpdateController() && UCubismUpdateControllerComponent::FindController(this))
 	{
 		return;
 	}
 
-	if (!Model)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("Model is null."));
-		return;
-	}
+	OnCubismUpdate(DeltaTime);
+}
 
-	DoFade(DeltaTime);
-	CopyPartOpacities();
+int32 UCubismPoseComponent::GetExecutionOrder() const
+{
+	return CUBISM_EXECUTION_ORDER_POSE;
 }
 
 void UCubismPoseComponent::OnCubismUpdate(float DeltaTime)
@@ -380,18 +366,22 @@ void UCubismPoseComponent::OnCubismUpdate(float DeltaTime)
 	}
 #endif
 
-	if (!Model)
+	if (!IsValid(Model))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("Model is null."));
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel())
+	{
 		return;
 	}
 
 	DoFade(DeltaTime);
-	CopyPartOpacities();
-}
 
-int32 UCubismPoseComponent::GetExecutionOrder() const
-{
-	return CUBISM_EXECUTION_ORDER_POSE;
+	CopyPartOpacities();
 }
 // End of UActorComponent interface

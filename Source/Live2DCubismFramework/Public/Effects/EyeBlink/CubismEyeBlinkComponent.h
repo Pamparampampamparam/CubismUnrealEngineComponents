@@ -9,6 +9,8 @@
 #pragma once
 
 #include "Model/CubismModelComponent.h"
+
+#include "Components/ActorComponent.h"
 #include "CubismUpdatableInterface.h"
 #include "CubismEyeBlinkComponent.generated.h"
 
@@ -102,19 +104,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
 	TArray<FString> Ids;
 
-	// ICubismUpdatableInterface
-	virtual bool IsControlledByUpdateController() const override { return true; }
-	virtual int32 GetExecutionOrder() const override;
-	virtual void OnCubismUpdate(float DeltaTime) override;
-
-	/**
-	 * Whether to enable blinking in editor mode.
-	 */
-#if WITH_EDITORONLY_DATA
-	UPROPERTY(EditAnywhere, Category = "Live2D Cubism")
-	bool bEnableEyeBlinkInEditor = false;
-#endif
-
 public:
 	/**
 	 * @brief The function to set up the component.
@@ -124,20 +113,43 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void Setup(UCubismModelComponent* InModel);
 
-private:
-	friend class UCubismModelComponent;
+	// ICubismUpdatableInterface
+	virtual bool IsControlledByUpdateController() const override { return true; }
+	virtual int32 GetExecutionOrder() const override;
+	virtual void OnCubismUpdate(float DeltaTime) override;
+
+#if WITH_EDITORONLY_DATA
+	/**
+	 * Whether to enable blinking in editor mode.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Live2D Cubism")
+	bool bEnableEyeBlinkInEditor = false;
+#endif
 
 	/**
-	 * The model component that the component depends on.
+	 * @brief Whether the component is bound to a model that is ready to be queried.
 	 */
-	UPROPERTY()
-	TObjectPtr<UCubismModelComponent> Model;
+	bool HasValidModel() const;
 
 private:
 	/**
 	 * @brief The constructor of the component.
 	 */
 	UCubismEyeBlinkComponent();
+
+	TObjectPtr<UCubismModelComponent> GetModel();
+
+	/**
+	 * @brief Applies the current value to the target parameters.
+	 */
+	void ApplyValue();
+
+	/**
+	 * The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
+	 */
+	UPROPERTY(Transient, DuplicateTransient)
+	TObjectPtr<UCubismModelComponent> Model;
 
 	/**
 	 * The state of eye blink.
@@ -164,8 +176,8 @@ public:
 	// UObject interface
 	virtual void PostLoad() override;
 
-#if WITH_EDITORONLY_DATA
-	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	// End of UObject interface
 

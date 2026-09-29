@@ -8,6 +8,11 @@
 
 #pragma once
 
+#include "Runtime/Launch/Resources/Version.h"
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 4
+#include "UObject/AssetRegistryTagsContext.h"
+#endif
+
 #include "Live2DCubismCore.h"
 #include "EditorFramework/AssetImportData.h"
 
@@ -37,25 +42,33 @@ public:
 	FString CubismStoredSourcePath;
 
 public:
+	UCubismMoc3();
+
 	/**
-	 * @brief The function to load the moc data into memory and assign it to the model.
-	 * @param Model The model to assign the moc to.
+	 * @brief The function to create a raw model from the moc data and assign it to the model component.
+	 * @param Model The model to assign the raw model to.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Moc Data")
 	void SetupModel(UCubismModelComponent* InModel);
 
 	/**
-	 * @brief The function to delete the moc data assigned to the model and free the memory.
-	 * @param Model The model to delete the moc data from.
+	 * @brief The function to free the raw model assigned to the model component.
+	 * @param Model The model to delete the raw model from.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Moc Data")
 	void DeleteModel(UCubismModelComponent* InModel);
 
 	/**
-	 * @brief The function to set up the moc data.
+	 * @brief The function to revive the moc data in memory. Does nothing if it is already revived.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Moc Data")
 	void Setup();
+
+	/**
+	 * @brief Whether the moc data has been revived and models can be created from it.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	bool IsMocReady() const { return RawMoc != nullptr; }
 
 	////
 
@@ -139,7 +152,11 @@ public:
 	TObjectPtr<class UAssetImportData> AssetImportData;
 
 	// UObject interface
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 4
+	virtual void GetAssetRegistryTags(FAssetRegistryTagsContext Context) const override;
+#else
 	virtual void GetAssetRegistryTags(TArray<FAssetRegistryTag>& OutTags) const override;
+#endif
 	virtual void Serialize(FArchive& Ar) override;
 	// End of UObject interface
 #endif

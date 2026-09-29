@@ -19,7 +19,7 @@ public:
 	SLATE_BEGIN_ARGS(SCubismModelParameterControllerWindow)
 		: _ModelActor(nullptr)
 	{}
-		SLATE_ARGUMENT(TWeakObjectPtr<ACubismModel>, ModelActor)
+		SLATE_ARGUMENT(TWeakObjectPtr<AActor>, ModelActor)
 	SLATE_END_ARGS()
 
 	~SCubismModelParameterControllerWindow();
@@ -57,8 +57,11 @@ private:
 	void SetCurrentTab(int32 NewTabIndex);
 
 private:
-	/** Currently selected model actor. */
-	TWeakObjectPtr<ACubismModel> ModelActor;
+	/** Currently selected actor that carries a model component. */
+	TWeakObjectPtr<AActor> ModelActor;
+
+	/** Returns the model component of the selected actor if it is ready. */
+	UCubismModelComponent* GetModel() const;
 
 	/** The widget switcher for tabs */
 	TSharedPtr<SWidgetSwitcher> TabContentSwitcher;

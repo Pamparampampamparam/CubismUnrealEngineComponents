@@ -36,6 +36,17 @@ void UCubismUserData3Json::PostLoad()
 }
 
 #if WITH_EDITORONLY_DATA
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 4
+void UCubismUserData3Json::GetAssetRegistryTags(FAssetRegistryTagsContext Context) const
+{
+	if (AssetImportData)
+	{
+		Context.AddTag( FAssetRegistryTag(SourceFileTagName(), AssetImportData->GetSourceData().ToJson(), FAssetRegistryTag::TT_Hidden) );
+	}
+
+	Super::GetAssetRegistryTags(Context);
+}
+#else
 void UCubismUserData3Json::GetAssetRegistryTags(TArray<FAssetRegistryTag>& OutTags) const
 {
 	if (AssetImportData)
@@ -45,6 +56,7 @@ void UCubismUserData3Json::GetAssetRegistryTags(TArray<FAssetRegistryTag>& OutTa
 
 	Super::GetAssetRegistryTags(OutTags);
 }
+#endif
 void UCubismUserData3Json::Serialize(FArchive& Ar)
 {
 	Super::Serialize(Ar);

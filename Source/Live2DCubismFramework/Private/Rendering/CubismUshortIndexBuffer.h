@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "Runtime/Launch/Resources/Version.h"
+#include "RenderResource.h"
 
 /**
  * Index buffer for a drawable.
@@ -40,10 +42,18 @@ public:
 
 		const uint32 SizeInBytes = Stride * NumIndices;
 
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 6
+		// UE 5.6+ : FRHIResourceCreateInfo based creation is deprecated, use FRHIBufferCreateDesc.
+		FRHIBufferCreateDesc IndexBufferDesc(*ResourceName, SizeInBytes, Stride, EBufferUsageFlags::IndexBuffer);
+		IndexBufferDesc.AddUsage(EBufferUsageFlags::Dynamic);
+		IndexBufferDesc.InitialState = ERHIAccess::VertexOrIndexBuffer;
+		IndexBufferDesc.SetInitActionResourceArray(Indices);
+		IndexBufferRHI = RHICmdList.CreateBuffer(IndexBufferDesc);
+#else
 		FRHIResourceCreateInfo IndexBufferInfo(*ResourceName);
 		IndexBufferInfo.ResourceArray = Indices;
 		IndexBufferRHI = RHICmdList.CreateIndexBuffer(Stride, SizeInBytes, BUF_Dynamic, IndexBufferInfo);
-
+#endif
 	}
 
 	virtual void ReleaseRHI() override

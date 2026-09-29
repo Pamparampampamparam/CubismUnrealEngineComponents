@@ -196,13 +196,21 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	int32 GetDrawableMaskCount() const;
 
+	/**
+	 * @brief Whether the component is bound to a model that is ready to be queried.
+	 */
+	bool HasValidModel() const;
+
 private:
 	friend class UCubismModelComponent;
 
+	TObjectPtr<UCubismModelComponent> GetModel();
+
 	/**
 	 * The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
 	 */
-	UPROPERTY()
+	UPROPERTY(Transient, DuplicateTransient)
 	TObjectPtr<UCubismModelComponent> Model;
 
 private:
@@ -268,10 +276,12 @@ private:
 	// UObject interface
 	virtual void PostLoad() override;
 
-#if WITH_EDITORONLY_DATA
-	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	// End of UObject interface
+
+	
 
 	// UActorComponent interface
 	virtual void OnComponentCreated() override;

@@ -9,12 +9,17 @@
 #include "Effects/EyeBlink/CubismEyeBlinkComponent.h"
 
 #include "CubismUpdateExecutionOrder.h"
+#include "CubismUpdateControllerComponent.h"
+
 #include "Model/CubismModelActor.h"
 #include "Model/CubismModelComponent.h"
 #include "Model/CubismModel3Json.h"
 #include "Model/CubismParameterComponent.h"
 
 UCubismEyeBlinkComponent::UCubismEyeBlinkComponent()
+	: Phase(ECubismEyeBlinkPhase::Idle)
+	, Time(0.0f)
+	, StartTime(0.0f)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
@@ -25,16 +30,17 @@ void UCubismEyeBlinkComponent::Setup(UCubismModelComponent* InModel)
 {
 	if (!InModel)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("ubismEyeBlinkComponent::Setup - InModel is null. Skipping setup."));
 		return;
 	}
 
-	check(InModel);
-
-	if (Model != InModel)
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
 	{
-		Model = InModel;
+		return;
 	}
+
+	Model = InModel;
+
+	UCubismUpdateControllerComponent::RequestRefresh(this);
 
 	Phase = ECubismEyeBlinkPhase::Idle;
 	Time = 0.0f;
@@ -49,7 +55,7 @@ void UCubismEyeBlinkComponent::Setup(UCubismModelComponent* InModel)
 
 	if (Model->EyeBlink != this)
 	{
-		if (Model->EyeBlink)
+		if (IsValid(Model->EyeBlink))
 		{
 			Model->EyeBlink->DestroyComponent();
 		}
@@ -59,173 +65,15 @@ void UCubismEyeBlinkComponent::Setup(UCubismModelComponent* InModel)
 	Model->AddTickPrerequisiteComponent(this); // model ticks after parameters are updated by components
 }
 
-// UObject interface
-void UCubismEyeBlinkComponent::PostLoad()
+bool UCubismEyeBlinkComponent::HasValidModel() const
 {
-	Super::PostLoad();
-
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
-	if (!Owner || !Owner->Model)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("No Owner or Model."));
-		return;
-	}
-
-	Setup(Owner->Model);
+	return IsValid(Model) && Model->IsModelReady();
 }
 
-#if WITH_EDITOR
-void UCubismEyeBlinkComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+void UCubismEyeBlinkComponent::ApplyValue()
 {
-	Super::PostEditChangeProperty(PropertyChangedEvent);
-
-	const FName PropertyName = PropertyChangedEvent.GetPropertyName();
-
-	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismEyeBlinkComponent, Value))
+	if (!HasValidModel())
 	{
-		if (!Model)
-		{
-			return;
-		}
-		for (const FString& Id : Ids)
-		{
-			UCubismParameterComponent* Destination = Model->GetParameter(Id);
-
-			if (!Destination)
-			{
-				continue;
-			}
-
-			switch (BlendMode)
-			{
-				case ECubismParameterBlendMode::Overwrite:
-				{
-					Destination->SetParameterValue(Value);
-					break;
-				}
-				case ECubismParameterBlendMode::Additive:
-				{
-					Destination->AddParameterValue(Value);
-					break;
-				}
-				case ECubismParameterBlendMode::Multiplicative:
-				{
-					Destination->MultiplyParameterValue(Value);
-					break;
-				}
-				default:
-				{
-					ensure(false);
-					break;
-				}
-			}
-		}
-	}
-	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismEyeBlinkComponent, bAutoEnabled))
-	{
-		Time = 0.0f;
-	}
-
-	const FName EyeBlinkPropertyName = PropertyChangedEvent.GetPropertyName();
-
-	if (EyeBlinkPropertyName == GET_MEMBER_NAME_CHECKED(UCubismEyeBlinkComponent, bEnableEyeBlinkInEditor))
-	{
-		if (GetWorld() && GetWorld()->WorldType == EWorldType::Editor)
-		{
-			SetComponentTickEnabled(bEnableEyeBlinkInEditor);
-		}
-	}
-}
-#endif
-// End of UObject interface
-
-// UActorComponent interface
-void UCubismEyeBlinkComponent::OnComponentCreated()
-{
-	Super::OnComponentCreated();
-
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
-
-	if (!Owner)
-	{
-		return;
-	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
-
-#if WITH_EDITOR
-	if (GetWorld() && GetWorld()->WorldType == EWorldType::Editor)
-	{
-		SetComponentTickEnabled(bEnableEyeBlinkInEditor);
-	}
-#endif
-}
-
-void UCubismEyeBlinkComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
-{
-	if (Model && Model->EyeBlink == this)
-	{
-		Model->EyeBlink = nullptr;
-	}
-
-	Super::OnComponentDestroyed(bDestroyingHierarchy);
-}
-
-#if WITH_EDITOR
-void UCubismEyeBlinkComponent::PostEditUndo()
-{
-	Super::PostEditUndo();
-
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
-
-	if (!Owner)
-	{
-		return;
-	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
-}
-#endif
-
-void UCubismEyeBlinkComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
-{
-	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-
-	if (IsControlledByUpdateController())
-	{
-		return;
-	}
-
-	OnCubismUpdate(DeltaTime);
-}
-
-void UCubismEyeBlinkComponent::OnCubismUpdate(float DeltaTime)
-{
-#if WITH_EDITOR
-	if (GetWorld() && GetWorld()->WorldType == EWorldType::Editor && !bEnableEyeBlinkInEditor)
-	{
-		return;
-	}
-#endif
-
-	if (!Model)
-	{
-		return;
-	}
-
-	Update(DeltaTime);
-
-	if (!Model)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("EyeBlinkComponent: Model is null."));
 		return;
 	}
 
@@ -264,9 +112,130 @@ void UCubismEyeBlinkComponent::OnCubismUpdate(float DeltaTime)
 	}
 }
 
+TObjectPtr<UCubismModelComponent> UCubismEyeBlinkComponent::GetModel()
+{
+	return UCubismModelComponent::FindModelComponent(this);
+}
+
+// UObject interface
+void UCubismEyeBlinkComponent::PostLoad()
+{
+	Super::PostLoad();
+
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
+
+	if (ModelComp)
+	{
+		Setup(ModelComp);
+	}
+}
+
+#if WITH_EDITOR
+void UCubismEyeBlinkComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	const FName PropertyName = PropertyChangedEvent.GetPropertyName();
+
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismEyeBlinkComponent, Value))
+	{
+		ApplyValue();
+	}
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismEyeBlinkComponent, bAutoEnabled))
+	{
+		Time = 0.0f;
+	}
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismEyeBlinkComponent, Json))
+	{
+		if (Json)
+		{
+			Ids.Empty();
+			Ids.Append(Json->EyeBlinks);
+		}
+	}
+}
+#endif
+// End of UObject interface
+
+// UActorComponent interface
+void UCubismEyeBlinkComponent::OnComponentCreated()
+{
+	Super::OnComponentCreated();
+
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
+
+	if (ModelComp)
+	{
+		Setup(ModelComp);
+	}
+}
+
+void UCubismEyeBlinkComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
+{
+	if (IsValid(Model) && Model->EyeBlink == this)
+	{
+		Model->EyeBlink = nullptr;
+	}
+
+	Super::OnComponentDestroyed(bDestroyingHierarchy);
+}
+
+#if WITH_EDITOR
+void UCubismEyeBlinkComponent::PostEditUndo()
+{
+	Super::PostEditUndo();
+
+	if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+	{
+		Setup(ModelComp);
+	}
+}
+#endif
+
+void UCubismEyeBlinkComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	// When an update controller drives this actor it calls OnCubismUpdate in execution order instead.
+	if (IsControlledByUpdateController() && UCubismUpdateControllerComponent::FindController(this))
+	{
+		return;
+	}
+
+	OnCubismUpdate(DeltaTime);
+}
+
 int32 UCubismEyeBlinkComponent::GetExecutionOrder() const
 {
 	return CUBISM_EXECUTION_ORDER_EYEBLINK;
+}
+
+void UCubismEyeBlinkComponent::OnCubismUpdate(float DeltaTime)
+{
+#if WITH_EDITOR
+	if (GetWorld() && GetWorld()->WorldType == EWorldType::Editor && !bEnableEyeBlinkInEditor)
+	{
+		return;
+	}
+#endif
+
+	if (!IsValid(Model))
+	{
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel())
+	{
+		return;
+	}
+
+	Update(DeltaTime);
+
+	ApplyValue();
 }
 // End of UActorComponent interface
 
@@ -299,7 +268,7 @@ void UCubismEyeBlinkComponent::Update(const float DeltaTime)
 		}
 		case ECubismEyeBlinkPhase::Closing:
 		{
-			float t = ElapsedTime / ClosingPeriod;
+			float t = ClosingPeriod > 0.0f ? ElapsedTime / ClosingPeriod : 1.0f;
 
 			if (t >= 1.0f)
 			{
@@ -314,7 +283,7 @@ void UCubismEyeBlinkComponent::Update(const float DeltaTime)
 		}
 		case ECubismEyeBlinkPhase::Closed:
 		{
-			float t = ElapsedTime / ClosedPeriod;
+			float t = ClosedPeriod > 0.0f ? ElapsedTime / ClosedPeriod : 1.0f;
 
 			if (t >= 1.0f)
 			{
@@ -329,7 +298,7 @@ void UCubismEyeBlinkComponent::Update(const float DeltaTime)
 		}
 		case ECubismEyeBlinkPhase::Opening:
 		{
-			float t = ElapsedTime / OpeningPeriod;
+			float t = OpeningPeriod > 0.0f ? ElapsedTime / OpeningPeriod : 1.0f;
 
 			if (t >= 1.0f)
 			{

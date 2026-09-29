@@ -111,7 +111,7 @@ FCubismMaskRenderer::~FCubismMaskRenderer()
 
 void FCubismMaskRenderer::InitResource_RenderThread(FRHICommandListBase& RHICmdList)
 {
-#if (ENGINE_MAJOR_VERSION >= 5) && (ENGINE_MINOR_VERSION >= 6)
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 6
 
 	{
 		FRHIBufferCreateDesc VertexBufferDesc(TEXT("CubismMaskVertexBuffer"), sizeof(FMeshVertexData) * NumVertices, sizeof(FMeshVertexData), EBufferUsageFlags::VertexBuffer);
@@ -169,6 +169,12 @@ void FCubismMaskRenderer::ReleaseResource()
 
 void FCubismMaskRenderer::DrawMesh_RenderThread(FRHICommandList& RHICmdList, const FDrawableInfo& MaskDrawableInfo)
 {
+	// The buffers were sized from the drawable when the junction was built; a mismatch would overrun them.
+	if (NumVertices <= 0 || NumIndices <= 0 || MaskDrawableInfo.Vertices.Num() != NumVertices || MaskDrawableInfo.Indices.Num() != NumIndices)
+	{
+		return;
+	}
+
 	if (!bIsInitialized)
 	{
 		InitResource_RenderThread(RHICmdList);

@@ -7,6 +7,9 @@
 
 #pragma once
 #include "CoreMinimal.h"
+// 0: parameter store (restores the saved parameter values before anything else writes them)
+constexpr int32 CUBISM_EXECUTION_ORDER_PARAMETER_STORE = 0;
+
 // 100–199: motion
 constexpr int32 CUBISM_EXECUTION_ORDER_MOTION = 100;
 constexpr int32 CUBISM_EXECUTION_ORDER_RAYCAST = 110;
@@ -17,6 +20,8 @@ constexpr int32 CUBISM_EXECUTION_ORDER_POSE = 200;
 // 300–599: expression
 constexpr int32 CUBISM_EXECUTION_ORDER_EXPRESSION = 300;
 constexpr int32 CUBISM_EXECUTION_ORDER_EYEBLINK = 400;
+constexpr int32 CUBISM_EXECUTION_ORDER_HARMONICMOTION = 450;
+constexpr int32 CUBISM_EXECUTION_ORDER_LOOKAT = 460;
 constexpr int32 CUBISM_EXECUTION_ORDER_LIPSYNC = 500;
 
 // 600–899: physics

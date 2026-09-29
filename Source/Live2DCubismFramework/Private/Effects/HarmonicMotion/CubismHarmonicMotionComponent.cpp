@@ -8,6 +8,9 @@
 
 #include "Effects/HarmonicMotion/CubismHarmonicMotionComponent.h"
 
+#include "CubismUpdateExecutionOrder.h"
+#include "CubismUpdateControllerComponent.h"
+
 #include "Effects/HarmonicMotion/CubismHarmonicMotionParameter.h"
 #include "Model/CubismModelActor.h"
 #include "Model/CubismModelComponent.h"
@@ -16,7 +19,7 @@
 UCubismHarmonicMotionComponent::UCubismHarmonicMotionComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
-	PrimaryComponentTick.TickGroup = TG_DuringPhysics;
+	PrimaryComponentTick.TickGroup = TG_PrePhysics;
 	bTickInEditor = true;
 }
 
@@ -27,14 +30,23 @@ void UCubismHarmonicMotionComponent::Setup(UCubismModelComponent* InModel)
 		return;
 	}
 
-	if (Model != InModel)
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
 	{
-		Model = InModel;
+		return;
+	}
+
+	Model = InModel;
+
+	UCubismUpdateControllerComponent::RequestRefresh(this);
+
+	for (FCubismHarmonicMotionParameter& Parameter : Parameters)
+	{
+		Parameter.ElapsedTime = 0.0f;
 	}
 
 	if (Model->HarmonicMotion != this)
 	{
-		if (Model->HarmonicMotion)
+		if (IsValid(Model->HarmonicMotion))
 		{
 			Model->HarmonicMotion->DestroyComponent();
 		}
@@ -44,23 +56,27 @@ void UCubismHarmonicMotionComponent::Setup(UCubismModelComponent* InModel)
 	Model->AddTickPrerequisiteComponent(this); // model ticks after parameters are updated by components
 }
 
+bool UCubismHarmonicMotionComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
+}
+
+TObjectPtr<UCubismModelComponent> UCubismHarmonicMotionComponent::GetModel()
+{
+	return UCubismModelComponent::FindModelComponent(this);
+}
+
 // UObject interface
 void UCubismHarmonicMotionComponent::PostLoad()
 {
 	Super::PostLoad();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	if (!Owner)
+	if (ModelComp)
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
 }
 // End of UObject interface
 
@@ -69,23 +85,17 @@ void UCubismHarmonicMotionComponent::OnComponentCreated()
 {
 	Super::OnComponentCreated();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	if (!Owner)
+	if (ModelComp)
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
 }
 
 void UCubismHarmonicMotionComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
 {
-	if (Model && Model->HarmonicMotion == this)
+	if (IsValid(Model) && Model->HarmonicMotion == this)
 	{
 		Model->HarmonicMotion = nullptr;
 	}
@@ -98,18 +108,10 @@ void UCubismHarmonicMotionComponent::PostEditUndo()
 {
 	Super::PostEditUndo();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
-
-	if (!Owner)
+	if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
 }
 #endif
 
@@ -117,7 +119,32 @@ void UCubismHarmonicMotionComponent::TickComponent(float DeltaTime, ELevelTick T
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (!Model)
+	// When an update controller drives this actor it calls OnCubismUpdate in execution order instead.
+	if (IsControlledByUpdateController() && UCubismUpdateControllerComponent::FindController(this))
+	{
+		return;
+	}
+
+	OnCubismUpdate(DeltaTime);
+}
+
+int32 UCubismHarmonicMotionComponent::GetExecutionOrder() const
+{
+	return CUBISM_EXECUTION_ORDER_HARMONICMOTION;
+}
+
+void UCubismHarmonicMotionComponent::OnCubismUpdate(float DeltaTime)
+{
+	if (!IsValid(Model))
+	{
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel())
 	{
 		return;
 	}
@@ -136,8 +163,9 @@ void UCubismHarmonicMotionComponent::TickComponent(float DeltaTime, ELevelTick T
 			continue;
 		}
 
-		Parameter.InternalTime += DeltaTime * Parameter.TimeScale;
-		Parameter.Value = Parameter.CalcValue(Parameter.InternalTime, Destination->MinimumValue, Destination->MaximumValue);
+		// Each parameter keeps its own clock so that several parameters do not speed each other up.
+		Parameter.ElapsedTime += DeltaTime * Parameter.TimeScale;
+		Parameter.Value = Parameter.CalcValue(Parameter.ElapsedTime, Destination->MinimumValue, Destination->MaximumValue);
 
 		switch (Parameter.BlendMode)
 		{

@@ -154,8 +154,21 @@ TArray<FRichCurveKey> FCubismMotion3JsonImporter::ParseSegments(const TArray<flo
 {
 	TArray<FRichCurveKey> KeyFrames;
 
+	if (Segments.Num() < 2)
+	{
+		UE_LOG(LogCubism, Error, TEXT("Motion curve has no key points."));
+
+		return KeyFrames;
+	}
+
 	KeyFrames.Add(FRichCurveKey(Segments[0], Segments[1]));
 	NumPoints += 1;
+
+	// Every segment is a type id followed by 2 (linear/stepped) or 6 (bezier) values.
+	const auto HasValues = [&Segments](const int32 Index, const int32 Count)
+	{
+		return Index + Count < Segments.Num();
+	};
 
 	int32 i = 2;
 	while (i < Segments.Num())
@@ -163,6 +176,16 @@ TArray<FRichCurveKey> FCubismMotion3JsonImporter::ParseSegments(const TArray<flo
 		FRichCurveKey K0 = KeyFrames.Pop();
 
 		const int32 CurveType = Segments[i];
+
+		if (!HasValues(i, CurveType == 1 ? 6 : 2))
+		{
+			UE_LOG(LogCubism, Error, TEXT("Motion curve segment at %d is truncated."), i);
+
+			KeyFrames.Add(K0);
+
+			break;
+		}
+
 		switch (CurveType)
 		{
 			case 0: // Linear
@@ -197,14 +220,18 @@ TArray<FRichCurveKey> FCubismMotion3JsonImporter::ParseSegments(const TArray<flo
 
 				const float OneThird = 1.0f / 3.0f;
 
+				// A control point on top of its key would give a zero-length handle (and a division by zero).
+				const float LeaveDeltaTime = FMath::Max(ta - t0, KINDA_SMALL_NUMBER);
+				const float ArriveDeltaTime = FMath::Max(t1 - tb, KINDA_SMALL_NUMBER);
+
 				K0.InterpMode = RCIM_Cubic;
-				K0.LeaveTangent = (va - v0) / (ta - t0);
-				K0.LeaveTangentWeight = (ta - t0) * FMath::Sqrt(1.0f + K0.LeaveTangent * K0.LeaveTangent);
+				K0.LeaveTangent = (va - v0) / LeaveDeltaTime;
+				K0.LeaveTangentWeight = LeaveDeltaTime * FMath::Sqrt(1.0f + K0.LeaveTangent * K0.LeaveTangent);
 				K0.TangentWeightMode = K0.ArriveTangentWeight? (K0.LeaveTangentWeight? RCTWM_WeightedBoth : RCTWM_WeightedArrive) : (K0.LeaveTangentWeight? RCTWM_WeightedLeave : RCTWM_WeightedNone);
 				K0.TangentMode = RCTM_Break;
 
-				K1.ArriveTangent = (v1 - vb) / (t1 - tb);
-				K1.ArriveTangentWeight = (t1 - tb) * FMath::Sqrt(1.0f + K1.ArriveTangent * K1.ArriveTangent);
+				K1.ArriveTangent = (v1 - vb) / ArriveDeltaTime;
+				K1.ArriveTangentWeight = ArriveDeltaTime * FMath::Sqrt(1.0f + K1.ArriveTangent * K1.ArriveTangent);
 				K1.TangentWeightMode = RCTWM_WeightedArrive;
 				K1.TangentMode = RCTM_Break;
 
@@ -256,7 +283,12 @@ TArray<FRichCurveKey> FCubismMotion3JsonImporter::ParseSegments(const TArray<flo
 			}
 			default:
 			{
-				ensure(false);
+				UE_LOG(LogCubism, Error, TEXT("Motion curve segment at %d has an unknown type %d."), i, CurveType);
+
+				// Keep the popped key and stop parsing this curve instead of looping forever.
+				KeyFrames.Add(K0);
+
+				i = Segments.Num();
 
 				break;
 			}

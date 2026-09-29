@@ -23,6 +23,7 @@
 #include "UObject/Package.h"
 #include "Misc/Paths.h"
 #include "Misc/PackageName.h"
+#include "CubismLog.h"
 
 ACubismModel::ACubismModel()
 {
@@ -33,14 +34,28 @@ ACubismModel::ACubismModel()
 
 void ACubismModel::Initialize(UCubismModel3Json* Model3Json)
 {
+	if (!Model3Json)
+	{
+		UE_LOG(LogCubism, Warning, TEXT("ACubismModel::Initialize: no model asset given."));
+		return;
+	}
+
 	// Model Component
-	Model = NewObject<UCubismModelComponent>(this, TEXT("CubismModel"), RF_Transactional);
-	SetRootComponent(Model);
+	if (!IsValid(Model))
+	{
+		Model = NewObject<UCubismModelComponent>(this, TEXT("CubismModel"), RF_Transactional);
+		SetRootComponent(Model);
+	}
 
 	{
 		// load .moc3
 		Model->Moc = LoadMoc(Model3Json);
-	
+
+		if (!Model->Moc)
+		{
+			UE_LOG(LogCubism, Error, TEXT("ACubismModel::Initialize: the moc asset of '%s' could not be loaded."), *Model3Json->GetName());
+		}
+
 		// load textures
 		const TArray<TObjectPtr<UTexture2D>>& Textures = LoadTextures(Model3Json);
 		Model->Textures.Empty();
@@ -60,60 +75,30 @@ void ACubismModel::Initialize(UCubismModel3Json* Model3Json)
 			Model->UserDataJson = UserData3Json;
 		}
 
-		Model->RegisterComponent();
-		AddInstanceComponent(Model);
-	}
-
-	// setup cubism parameter store
-	{
-		UCubismParameterStoreComponent* ParameterStore = NewObject<UCubismParameterStoreComponent>(Model, TEXT("CubismParameterStore"), RF_Transactional);
-
-		ParameterStore->RegisterComponent();
-	}
-
-	// load motion3.json
-	const TArray<FMotion3JsonGroup>& Motion3JsonGroups = LoadMotion3Jsons(Model3Json);
-	if (Motion3JsonGroups.Num() != 0)
-	{
-		UCubismMotionComponent* Motion = NewObject<UCubismMotionComponent>(Model, TEXT("CubismMotion"), RF_Transactional);
-
-		Motion->Jsons.Empty();
-		for (const FMotion3JsonGroup& Group : Motion3JsonGroups)
+		// The json assets below are turned into their components by the model component itself (see UCubismModelComponent::ComponentSetup).
+		Model->MotionJsons.Empty();
+		for (const FMotion3JsonGroup& Group : LoadMotion3Jsons(Model3Json))
 		{
-			Motion->Jsons.Append(Group.Motion3Jsons);
+			Model->MotionJsons.Append(Group.Motion3Jsons);
 		}
 
-		Motion->RegisterComponent();
-		AddInstanceComponent(Motion);
-	}
+		Model->ExpressionJsons = LoadExp3Jsons(Model3Json);
+		Model->PoseJson = LoadPose3Json(Model3Json);
+		Model->PhysicsJson = LoadPhysics3Json(Model3Json);
 
-	// load pose3.json
-	const TObjectPtr<UCubismPose3Json>& Pose3Json = LoadPose3Json(Model3Json);
-	if (Pose3Json != nullptr)
-	{
-		UCubismPoseComponent* Pose = NewObject<UCubismPoseComponent>(Model, TEXT("CubismPose"));
+		if (!Model->IsRegistered())
+		{
+			Model->RegisterComponent();
+		}
+		AddInstanceComponent(Model);
 
-		Pose->Json = Pose3Json;
-
-		Pose->RegisterComponent();
-		AddInstanceComponent(Pose);
-	}
-
-	// load exp3.json
-	const TArray<TObjectPtr<UCubismExp3Json>>& Exp3Jsons = LoadExp3Jsons(Model3Json);
-	if (Exp3Jsons.Num() != 0)
-	{
-		UCubismExpressionComponent* Expression = NewObject<UCubismExpressionComponent>(Model, TEXT("CubismExpression"));
-
-		Expression->Jsons.Empty();
-		Expression->Jsons.Append(Exp3Jsons);
-
-		Expression->RegisterComponent();
-		AddInstanceComponent(Expression);
+		// Creates the raw model, the drawables/parameters/parts and the helper components (parameter store, motion, expression, pose, physics, renderer)
+		// in case the registration above could not do it yet.
+		Model->EnsureModelBuilt();
 	}
 
 	// setup eye blink if exists
-	if (Model3Json->EyeBlinks.Num() > 0)
+	if (Model3Json->EyeBlinks.Num() > 0 && !IsValid(Model->EyeBlink))
 	{
 		UCubismEyeBlinkComponent* EyeBlink = NewObject<UCubismEyeBlinkComponent>(Model, TEXT("CubismEyeBlink"), RF_Transactional);
 
@@ -124,7 +109,7 @@ void ACubismModel::Initialize(UCubismModel3Json* Model3Json)
 	}
 
 	// setup lip sync if exists
-	if (Model3Json->LipSyncs.Num() > 0)
+	if (Model3Json->LipSyncs.Num() > 0 && !IsValid(Model->LipSync))
 	{
 		UCubismLipSyncComponent* LipSync = NewObject<UCubismLipSyncComponent>(Model, TEXT("CubismLipSync"), RF_Transactional);
 
@@ -135,7 +120,7 @@ void ACubismModel::Initialize(UCubismModel3Json* Model3Json)
 	}
 
 	// setup raycast if exists
-	if (Model3Json->HitAreas.Num() > 0)
+	if (Model3Json->HitAreas.Num() > 0 && !IsValid(Model->Raycast))
 	{
 		UCubismRaycastComponent* Raycast = NewObject<UCubismRaycastComponent>(Model, TEXT("CubismRaycast"), RF_Transactional);
 
@@ -143,25 +128,6 @@ void ACubismModel::Initialize(UCubismModel3Json* Model3Json)
 
 		Raycast->RegisterComponent();
 		AddInstanceComponent(Raycast);
-	}
-
-	// load physics3.json
-	const TObjectPtr<UCubismPhysics3Json>& Physics3Json = LoadPhysics3Json(Model3Json);
-	if (Physics3Json != nullptr)
-	{
-		UCubismPhysicsComponent* Physics = NewObject<UCubismPhysicsComponent>(Model, TEXT("CubismPhysics"));
-
-		Physics->Json = Physics3Json;
-
-		Physics->RegisterComponent();
-		AddInstanceComponent(Physics);
-	}
-
-	{
-		UCubismRendererComponent* Renderer = NewObject<UCubismRendererComponent>(Model, TEXT("CubismRenderer"), RF_Transactional);
-
-		Renderer->RegisterComponent();
-		AddInstanceComponent(Renderer);
 	}
 }
 
@@ -207,6 +173,14 @@ TArray<TObjectPtr<UTexture2D>> ACubismModel::LoadTextures(const TObjectPtr<UCubi
 		const FString& AssetPath = GetAssetPath(LongPackagePath / TexturePath);
 
 		TObjectPtr<UTexture2D> Texture = LoadObject<UTexture2D>(nullptr, *AssetPath);
+
+		if (!Texture)
+		{
+			UE_LOG(LogCubism, Warning, TEXT("ACubismModel::LoadTextures: texture '%s' was not found."), *AssetPath);
+
+			Textures.Add(nullptr);
+			continue;
+		}
 
 		// Workaround for when the texture is loaded as a normal map
 		if (!Texture->SRGB || Texture->CompressionSettings != TC_Default || Texture->LODGroup != TEXTUREGROUP_World)

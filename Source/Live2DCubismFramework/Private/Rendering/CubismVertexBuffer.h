@@ -8,6 +8,9 @@
 
 #pragma once
 
+#include "Runtime/Launch/Resources/Version.h"
+#include "RenderResource.h"
+#include "StaticMeshVertexData.h"
 
 template<typename ElementType>
 class FCubismVertexBuffer : public FVertexBuffer
@@ -50,7 +53,11 @@ public:
 #endif
 		if (VertexBufferRHI)
 		{
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 6
+			ComponentSRV = RHICmdList.CreateShaderResourceView(VertexBufferRHI, FRHIViewDesc::CreateBufferSRV().SetType(FRHIViewDesc::EBufferType::Typed).SetFormat(PF_G32R32F));
+#else
 			ComponentSRV = RHICmdList.CreateShaderResourceView(VertexBufferRHI, 8, PF_G32R32F);
+#endif
 		}
 	}
 

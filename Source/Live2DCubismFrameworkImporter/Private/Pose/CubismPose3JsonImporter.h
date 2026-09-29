@@ -24,7 +24,7 @@ private:
 	static TSharedPtr<FJsonObject> ParseJSON(const FString& FileContent, bool bSilent);
 
 protected:
-	int32 Version;
+	int32 Version = 0;
 
 	float FadeInTime = 0.5f;
 

@@ -10,6 +10,8 @@
 
 #include "Components/ActorComponent.h"
 
+#include "Components/ActorComponent.h"
+#include "CubismUpdatableInterface.h"
 #include "CubismParameterStoreComponent.generated.h"
 
 class UCubismModelComponent;
@@ -18,7 +20,7 @@ class UCubismModelComponent;
  * A component to store the parameters of a Live2D Cubism model.
  */
 UCLASS(Blueprintable)
-class LIVE2DCUBISMFRAMEWORK_API UCubismParameterStoreComponent : public UActorComponent
+class LIVE2DCUBISMFRAMEWORK_API UCubismParameterStoreComponent : public UActorComponent, public ICubismUpdatableInterface
 {
 	GENERATED_BODY()
 
@@ -57,13 +59,26 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void LoadParameters();
 
+	/**
+	 * @brief Whether the component is bound to a model that is ready to be queried.
+	 */
+	// ICubismUpdatableInterface
+	virtual bool IsControlledByUpdateController() const override { return true; }
+	virtual int32 GetExecutionOrder() const override;
+	virtual void OnCubismUpdate(float DeltaTime) override;
+
+	bool HasValidModel() const;
+
 private:
 	friend class UCubismModelComponent;
 
+	TObjectPtr<UCubismModelComponent> GetModel();
+
 	/**
 	 * The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
 	 */
-	UPROPERTY()
+	UPROPERTY(Transient, DuplicateTransient)
 	TObjectPtr<UCubismModelComponent> Model;
 
 private:

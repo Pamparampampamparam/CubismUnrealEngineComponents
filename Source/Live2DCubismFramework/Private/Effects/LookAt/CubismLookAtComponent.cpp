@@ -8,15 +8,20 @@
 
 #include "Effects/LookAt/CubismLookAtComponent.h"
 
+#include "CubismUpdateExecutionOrder.h"
+#include "CubismUpdateControllerComponent.h"
+
 #include "Effects/LookAt/CubismLookAtParameter.h"
 #include "Model/CubismModelActor.h"
 #include "Model/CubismModelComponent.h"
 #include "Model/CubismParameterComponent.h"
 
 UCubismLookAtComponent::UCubismLookAtComponent()
+	: LastPosition(FVector::ZeroVector)
+	, CurrentVelocity(FVector::ZeroVector)
 {
 	PrimaryComponentTick.bCanEverTick = true;
-	PrimaryComponentTick.TickGroup = TG_DuringPhysics;
+	PrimaryComponentTick.TickGroup = TG_PrePhysics;
 	bTickInEditor = true;
 }
 
@@ -27,17 +32,21 @@ void UCubismLookAtComponent::Setup(UCubismModelComponent* InModel)
 		return;
 	}
 
-	if (Model != InModel)
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
 	{
-		Model = InModel;
+		return;
 	}
+
+	Model = InModel;
+
+	UCubismUpdateControllerComponent::RequestRefresh(this);
 
 	LastPosition = FVector::ZeroVector;
 	CurrentVelocity = FVector::ZeroVector;
 
 	if (Model->LookAt != this)
 	{
-		if (Model->LookAt)
+		if (IsValid(Model->LookAt))
 		{
 			Model->LookAt->DestroyComponent();
 		}
@@ -47,23 +56,27 @@ void UCubismLookAtComponent::Setup(UCubismModelComponent* InModel)
 	Model->AddTickPrerequisiteComponent(this); // model ticks after parameters are updated by components
 }
 
+bool UCubismLookAtComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
+}
+
+TObjectPtr<UCubismModelComponent> UCubismLookAtComponent::GetModel()
+{
+	return UCubismModelComponent::FindModelComponent(this);
+}
+
 // UObject interface
 void UCubismLookAtComponent::PostLoad()
 {
 	Super::PostLoad();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	if (!Owner)
+	if (ModelComp)
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
 }
 // End of UObject interface
 
@@ -72,23 +85,17 @@ void UCubismLookAtComponent::OnComponentCreated()
 {
 	Super::OnComponentCreated();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	if (!Owner)
+	if (ModelComp)
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
 }
 
 void UCubismLookAtComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
 {
-	if (Model && Model->LookAt == this)
+	if (IsValid(Model) && Model->LookAt == this)
 	{
 		Model->LookAt = nullptr;
 	}
@@ -101,18 +108,10 @@ void UCubismLookAtComponent::PostEditUndo()
 {
 	Super::PostEditUndo();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
-
-	if (!Owner)
+	if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
 }
 #endif
 
@@ -120,7 +119,32 @@ void UCubismLookAtComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	if (!Model)
+	// When an update controller drives this actor it calls OnCubismUpdate in execution order instead.
+	if (IsControlledByUpdateController() && UCubismUpdateControllerComponent::FindController(this))
+	{
+		return;
+	}
+
+	OnCubismUpdate(DeltaTime);
+}
+
+int32 UCubismLookAtComponent::GetExecutionOrder() const
+{
+	return CUBISM_EXECUTION_ORDER_LOOKAT;
+}
+
+void UCubismLookAtComponent::OnCubismUpdate(float DeltaTime)
+{
+	if (!IsValid(Model))
+	{
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel())
 	{
 		return;
 	}
@@ -194,14 +218,14 @@ void UCubismLookAtComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 
 FVector UCubismLookAtComponent::SmoothDamp(const FVector CurrentValue, const float DeltaTime)
 {
-	// global(world) coordinates to local(object) coordinates
-	const FTransform Transform = Model->GetRelativeTransform();
-	FVector TargetValue = Transform.InverseTransformPosition(Target ? Target->GetActorLocation() : Transform.GetLocation());
+	// global(world) coordinates to local(model) coordinates
+	const FTransform Transform = Model->GetComponentTransform();
+	FVector TargetValue = Transform.InverseTransformPosition(IsValid(Target) ? Target->GetActorLocation() : Transform.GetLocation());
 
 	const float Scale = 100.0f / Model->GetPixelsPerUnit();
 	TargetValue = FVector(-TargetValue.Y, TargetValue.Z, TargetValue.X) * Scale;
 
-	const float Omega = 2.0f / Smoothing;
+	const float Omega = 2.0f / FMath::Max(Smoothing, KINDA_SMALL_NUMBER);
 	const float x = Omega * DeltaTime;
 	const float Invexp = 1.0f / (1.0f + x + 0.48f * x * x + 0.235f * x * x * x);
 

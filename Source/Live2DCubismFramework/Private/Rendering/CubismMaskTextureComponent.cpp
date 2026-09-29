@@ -8,6 +8,7 @@
 
 #include "Rendering/CubismMaskTextureComponent.h"
 
+#include "Model/CubismModelComponent.h"
 #include "Model/CubismDrawableComponent.h"
 #include "Rendering/CubismRendererComponent.h"
 #include "Rendering/CubismMaskJunction.h"
@@ -16,6 +17,8 @@
 #include "CubismLog.h"
 #include "Engine/World.h"
 #include "SceneInterface.h"
+#include "GameFramework/Actor.h"
+#include <math.h>
 
 UCubismMaskTextureComponent::UCubismMaskTextureComponent()
 {
@@ -24,14 +27,12 @@ UCubismMaskTextureComponent::UCubismMaskTextureComponent()
 	bTickInEditor = true;
 }
 
-void UCubismMaskTextureComponent::AddModel(ACubismModel* ModelActor)
+void UCubismMaskTextureComponent::AddModel(AActor* Model)
 {
-	for (const TObjectPtr<UCubismDrawableComponent>& Drawable : ModelActor->Model->Drawables)
+	if (Model)
 	{
-		AddTickPrerequisiteComponent(Drawable); // must be updated after drawable updated
+		Models.AddUnique(Model);
 	}
-
-	Models.AddUnique(ModelActor);
 
 	for (int32 i = Models.Num() - 1; i >= 0; --i)
 	{
@@ -44,14 +45,20 @@ void UCubismMaskTextureComponent::AddModel(ACubismModel* ModelActor)
 	bDirty = true;
 }
 
-void UCubismMaskTextureComponent::RemoveModel(ACubismModel* ModelActor)
+void UCubismMaskTextureComponent::RemoveModel(AActor* Model)
 {
-	for (const TObjectPtr<UCubismDrawableComponent>& Drawable : ModelActor->Model->Drawables)
+	if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel(Model))
 	{
-		RemoveTickPrerequisiteComponent(Drawable);
+		for (const TObjectPtr<UCubismDrawableComponent>& Drawable : ModelComp->Drawables)
+		{
+			if (IsValid(Drawable))
+			{
+				RemoveTickPrerequisiteComponent(Drawable);
+			}
+		}
 	}
 
-	Models.Remove(ModelActor);
+	Models.Remove(Model);
 
 	for (int32 i = Models.Num() - 1; i >= 0; --i)
 	{
@@ -67,12 +74,29 @@ void UCubismMaskTextureComponent::RemoveModel(ACubismModel* ModelActor)
 void UCubismMaskTextureComponent::ResolveMaskLayout()
 {
 	NumMasks = 0;
-	for (const TObjectPtr<ACubismModel>& ModelActor : Models)
+	for (const TObjectPtr<AActor>& ModelActor : Models)
 	{
-		if (IsValid(ModelActor) && IsValid(ModelActor->Model) && IsValid(ModelActor->Model->Renderer))
+		if (!IsValid(ModelActor))
 		{
-			NumMasks += ModelActor->Model->Renderer->NumMasks;
-			ModelActor->Model->Renderer->MaskTexture = (ACubismMaskTexture*) GetOwner();
+			continue;
+		}
+
+		const TObjectPtr<UCubismModelComponent> ModelComp = GetModel(ModelActor);
+
+		if (!ModelComp || !IsValid(ModelComp->Renderer))
+		{
+			continue;
+		}
+
+		NumMasks += ModelComp->Renderer->NumMasks;
+
+		// The masks must be drawn after the drawables were updated in this frame.
+		for (const TObjectPtr<UCubismDrawableComponent>& Drawable : ModelComp->Drawables)
+		{
+			if (IsValid(Drawable))
+			{
+				AddTickPrerequisiteComponent(Drawable);
+			}
 		}
 	}
 
@@ -84,19 +108,26 @@ void UCubismMaskTextureComponent::ResolveMaskLayout()
 
 	const int32 Resolution = 1<<LOD, LayoutSize = 1<<(LOD<<1);
 
-	AllocateRenderTargets(RenderTargetCount);
+	AllocateRenderTargets(FMath::Max(RenderTargetCount, 1));
 
 	int32 Index = 0;
-	for (const TObjectPtr<ACubismModel>& ModelActor : Models)
+	for (const TObjectPtr<AActor>& ModelActor : Models)
 	{
-		if (!IsValid(ModelActor) || !IsValid(ModelActor->Model) || !IsValid(ModelActor->Model->Renderer))
+		if (!IsValid(ModelActor))
 		{
 			continue;
 		}
 
-		for (const TSharedPtr<FCubismMaskJunction>& Junction : ModelActor->Model->Renderer->Junctions)
+		const TObjectPtr<UCubismModelComponent> ModelComp = GetModel(ModelActor);
+
+		if (!ModelComp || !IsValid(ModelComp->Renderer))
 		{
-			if (!Junction || Junction->MaskDrawables.Num() == 0)
+			continue;
+		}
+
+		for (const TSharedPtr<FCubismMaskJunction>& Junction : ModelComp->Renderer->Junctions)
+		{
+			if (!Junction.IsValid() || Junction->MaskDrawables.Num() == 0)
 			{
 				continue;
 			}
@@ -111,11 +142,11 @@ void UCubismMaskTextureComponent::ResolveMaskLayout()
 
 			if (RenderTargets.IsValidIndex(RenderTargetIndex))
 			{
-				Junction->RenderTarget =  RenderTargets[RenderTargetIndex];
+				Junction->RenderTarget = RenderTargets[RenderTargetIndex].Get();
 			}
 			else
 			{
-				Junction->RenderTarget = nullptr;
+				Junction->RenderTarget.Reset();
 
 				UE_LOG(LogCubism, Error, TEXT("The mask(%d) is not be drawn correctly because the number of render targets is not enough."), Index);
 			}
@@ -131,15 +162,12 @@ void UCubismMaskTextureComponent::ResolveMaskLayout()
 			 * u = (x+2c+1)/2R
 			 * v = (y+2r+1)/2R
 			 */
-			if (ModelActor->Model)
-			{
-				Junction->Offset = FVector4(
-					2.0f * Column + 1.0f,
-					2.0f * Row + 1.0f,
-					0.5f / Resolution,
-					100.0f / ModelActor->Model->GetPixelsPerUnit()
-				);
-			}
+			Junction->Offset = FVector4(
+				2.0f * Column + 1.0f,
+				2.0f *    Row + 1.0f,
+				0.5f / Resolution,
+				100.0f / ModelComp->GetPixelsPerUnit()
+			);
 
 			if (Channel%4 == 0)
 			{
@@ -166,16 +194,22 @@ void UCubismMaskTextureComponent::ResolveMaskLayout()
 
 void UCubismMaskTextureComponent::AllocateRenderTargets(const int32 RequiredRTs)
 {
+	// Drop entries that were lost (e.g. force deleted) so that the count below is accurate.
+	for (int32 i = RenderTargets.Num() - 1; i >= 0; --i)
+	{
+		if (!IsValid(RenderTargets[i]))
+		{
+			RenderTargets.RemoveAt(i);
+		}
+	}
+
 	const int32 Diff = RequiredRTs - RenderTargets.Num();
 	if (Diff > 0)
 	{
 		for (int32 i = 0; i < Diff; i++)
 		{
-			UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>(
-				this,
-				*FString::Printf(TEXT("MaskRenderTarget_%d"), RenderTargets.Num()),
-				RF_Transactional
-			);
+			const FName RenderTargetName = MakeUniqueObjectName(this, UTextureRenderTarget2D::StaticClass(), *FString::Printf(TEXT("MaskRenderTarget_%d"), RenderTargets.Num()));
+			UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>(this, RenderTargetName, RF_Transactional);
 			check(RenderTarget);
 			RenderTarget->RenderTargetFormat = RTF_RGBA8;
 			RenderTarget->ClearColor = FLinearColor::Transparent;
@@ -190,14 +224,24 @@ void UCubismMaskTextureComponent::AllocateRenderTargets(const int32 RequiredRTs)
 	{
 		for (int32 i = 0; i < -Diff; i++)
 		{
-			UTextureRenderTarget2D* OldRT = RenderTargets.Pop();
-			if (OldRT)
+			UTextureRenderTarget2D* RenderTarget = RenderTargets.Pop();
+
+			if (IsValid(RenderTarget))
 			{
-				OldRT->ConditionalBeginDestroy();
-				OldRT = nullptr;
+				RenderTarget->MarkAsGarbage();
 			}
 		}
 	}
+}
+
+TObjectPtr<UCubismModelComponent> UCubismMaskTextureComponent::GetModel(AActor* Model)
+{
+	if (!IsValid(Model))
+	{
+		return nullptr;
+	}
+
+	return Model->FindComponentByClass<UCubismModelComponent>();
 }
 
 // UObject interface
@@ -215,6 +259,8 @@ void UCubismMaskTextureComponent::PostEditChangeProperty(FPropertyChangedEvent& 
 
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismMaskTextureComponent, Size))
 	{
+		// The existing render targets have the old size; recreate them.
+		AllocateRenderTargets(0);
 		bDirty = true;
 	}
 
@@ -261,7 +307,7 @@ void UCubismMaskTextureComponent::PostEditUndo()
 {
 	Super::PostEditUndo();
 
-	ResolveMaskLayout();
+	bDirty = true;
 }
 #endif
 
@@ -275,6 +321,15 @@ void UCubismMaskTextureComponent::TickComponent(float DeltaTime, ELevelTick Tick
 		bDirty = false;
 	}
 
+	UWorld* World = GetWorld();
+
+	if (!World || !World->Scene)
+	{
+		return;
+	}
+
+	const ERHIFeatureLevel::Type FeatureLevel = World->Scene->GetFeatureLevel();
+
 	for (const TObjectPtr<UTextureRenderTarget2D>& RenderTarget : RenderTargets)
 	{
 		if (!IsValid(RenderTarget))
@@ -284,43 +339,66 @@ void UCubismMaskTextureComponent::TickComponent(float DeltaTime, ELevelTick Tick
 
 		TArray<FCubismMaskRenderer::FDrawableInfo> MaskDrawableInfoArray;
 
-		for (const TObjectPtr<ACubismModel>& ModelActor : Models)
+		for (const TObjectPtr<AActor>& ModelActor : Models)
 		{
-			if (!IsValid(ModelActor) || !IsValid(ModelActor->Model) || !IsValid(ModelActor->Model->Renderer))
+			if (!IsValid(ModelActor))
 			{
 				continue;
 			}
 
-			const TArray<TObjectPtr<UTexture2D>>& Textures = ModelActor->Model->Textures;
+			const TObjectPtr<UCubismModelComponent> ModelComp = GetModel(ModelActor);
 
-			for (const TSharedPtr<FCubismMaskJunction>& Junction : ModelActor->Model->Renderer->Junctions)
+			if (!ModelComp || !IsValid(ModelComp->Renderer))
+			{
+				continue;
+			}
+
+			const TArray<TObjectPtr<UTexture2D>>& Textures = ModelComp->Textures;
+
+			for (const TSharedPtr<FCubismMaskJunction>& Junction : ModelComp->Renderer->Junctions)
 			{
 				// If the render target does not match, skip drawing the mask.
-				if (Junction->RenderTarget != RenderTarget)
+				if (!Junction.IsValid() || Junction->RenderTarget.Get() != RenderTarget)
 				{
 					continue;
 				}
 
-				for (const FCubismMaskJunction::FMaskDrawableData& MaskDrawable : Junction->MaskDrawables)
+				for (const FCubismMaskJunction::FMaskDrawableData& MaskDrawableData : Junction->MaskDrawables)
 				{
-					const TObjectPtr<UCubismDrawableComponent>& DrawableData = MaskDrawable.Drawable;
+					const UCubismDrawableComponent* MaskDrawable = MaskDrawableData.Drawable.Get();
 
-					// If the texture does not exist, skip drawing the mask. 
-					if (DrawableData->TextureIndex >= Textures.Num())
+					if (!IsValid(MaskDrawable) || !MaskDrawableData.Renderer.IsValid())
 					{
 						continue;
 					}
 
-					const TObjectPtr<UTexture2D>& Texture = Textures[DrawableData->TextureIndex];
-
-					if (!Texture)
+					// If the texture does not exist, skip drawing the mask.
+					if (!Textures.IsValidIndex(MaskDrawable->TextureIndex))
 					{
 						continue;
 					}
 
-					const TArray<int32>& Indices = DrawableData->GetVertexIndices();
-					const TArray<FVector2D>& Positions = DrawableData->GetVertexPositions();
-					const TArray<FVector2D>& UVs = DrawableData->GetVertexUvs();
+					const TObjectPtr<UTexture2D>& Texture = Textures[MaskDrawable->TextureIndex];
+
+					if (!Texture || !Texture->GetResource())
+					{
+						continue;
+					}
+
+					const TArray<int32>& Indices = MaskDrawable->GetVertexIndices();
+					const TArray<FVector2D>& Positions = MaskDrawable->GetVertexPositions();
+					const TArray<FVector2D>& UVs = MaskDrawable->GetVertexUvs();
+
+					if (Indices.Num() == 0 || Positions.Num() == 0 || Positions.Num() != UVs.Num())
+					{
+						continue;
+					}
+
+					// The mask buffers are allocated once per drawable; skip if the mesh does not match them.
+					if (MaskDrawableData.Renderer->GetNumVertices() != Positions.Num() || MaskDrawableData.Renderer->GetNumIndices() != Indices.Num())
+					{
+						continue;
+					}
 
 					FCubismMaskRenderer::FDrawableInfo MaskDrawableInfo;
 
@@ -340,7 +418,7 @@ void UCubismMaskTextureComponent::TickComponent(float DeltaTime, ELevelTick Tick
 					MaskDrawableInfo.Offset = Junction->Offset;
 					MaskDrawableInfo.Channel = Junction->Channel;
 					MaskDrawableInfo.MainTexture = Texture->GetResource();
-					MaskDrawableInfo.Renderer = MaskDrawable.Renderer.Get();
+					MaskDrawableInfo.Renderer = MaskDrawableData.Renderer.Get();
 
 					MaskDrawableInfoArray.Add(MaskDrawableInfo);
 				}
@@ -349,11 +427,14 @@ void UCubismMaskTextureComponent::TickComponent(float DeltaTime, ELevelTick Tick
 
 		FTextureRenderTargetResource* RenderTargetResource = RenderTarget->GameThread_GetRenderTargetResource();
 
-		ERHIFeatureLevel::Type FeatureLevel = GetWorld()->Scene->GetFeatureLevel();
+		if (!RenderTargetResource)
+		{
+			continue;
+		}
 
 		// Draw the mask to the render target.
 		ENQUEUE_RENDER_COMMAND(DrawMaskCommand)(
-			[this, RenderTargetResource, MaskDrawableInfoArray, FeatureLevel](FRHICommandList& RHICmdList)
+			[RenderTargetResource, MaskDrawableInfoArray, FeatureLevel](FRHICommandList& RHICmdList)
 			{
 				FCubismMaskRenderer::DrawMeshes_RenderThread(RHICmdList, RenderTargetResource, MaskDrawableInfoArray, FeatureLevel);
 			}

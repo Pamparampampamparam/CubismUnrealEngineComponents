@@ -16,6 +16,7 @@ class ACubismModel;
 class ACubismMaskTexture;
 class FCubismMaskJunction;
 class UCubismModelComponent;
+class UCubismDrawableComponent;
 
 /**
  * The render order mode of the model.
@@ -61,7 +62,7 @@ public:
 	int32 RenderOrder = 0;
 
 	/**
-	 * The epsilon value used for the Z-sorting of the model.
+	 * The epsilon value to sort the drawables along the Z-axis.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism", meta = (EditCondition = "bZSort"))
 	float Epsilon = 0.1f;
@@ -73,7 +74,7 @@ public:
 	int32 NumMasks;
 
 	/**
-	 * The table that associates each Drawable with the mask it uses.
+	 * The list of the junctions that group the drawables sharing the same mask.
 	 */
 	TArray<TSharedPtr<FCubismMaskJunction>> Junctions;
 
@@ -92,32 +93,54 @@ public:
 	void Setup(UCubismModelComponent* InModel);
 
 	/**
-	 * @brief The function to apply the render order to the drawables.
+	 * @brief Applies the sorting settings to the drawables of the model.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	void ApplyRenderOrder();
+
+	/**
+	 * @brief The function to calculate the render order of the drawable.
+	 * @param Drawable The drawable to calculate the render order for.
+	 * @return The render order of the drawable.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	int32 CalcRenderOrder(const UCubismDrawableComponent* Drawable) const;
+
+	/**
+	 * @brief Whether the component is bound to a model that is ready to be queried.
+	 */
+	bool HasValidModel() const;
 
 private:
 	friend class UCubismModelComponent;
 
 	/**
-	 * The model component that the component depends on.
-	 */
-	UPROPERTY()
-	TObjectPtr<UCubismModelComponent> Model;
-
-private:
-	/**
 	 * @brief The constructor of the component.
 	 */
 	UCubismRendererComponent();
 
-public:	
+	/**
+	 * @brief Finds or spawns the mask texture actor of the world and registers the owner with it.
+	 */
+	void SpawnMaskTexture();
+
+	TObjectPtr<UCubismModelComponent> GetModel();
+
+	/**
+	 * The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
+	 */
+	UPROPERTY(Transient, DuplicateTransient)
+	TObjectPtr<UCubismModelComponent> Model;
+
+public:
+	virtual void BeginPlay() override;
+
 	// UObject interface
 	virtual void PostLoad() override;
 
-#if WITH_EDITORONLY_DATA
-	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	// End of UObject interface
 

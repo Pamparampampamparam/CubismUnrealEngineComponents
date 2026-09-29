@@ -85,9 +85,11 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Live2D Cubism")
 	FString Id = TEXT("");
 
-public:
-	UPROPERTY(Transient)
-	float InternalTime = 0.0f;
+	/**
+	 * The internal time of this parameter's oscillation (not saved).
+	 */
+	float ElapsedTime = 0.0f;
 
+public:
 	float CalcValue(const float Time, const float Min, const float Max);
 };

@@ -67,8 +67,9 @@ public:
 
 	/**
 	 * The curve table that contains the curves.
+	 * Weak because the motion is not tracked by the garbage collector; the motion asset owns the table.
 	 */
-	TObjectPtr<UCurveTable> CurveTable;
+	TWeakObjectPtr<UCurveTable> CurveTable;
 
 	/**
 	 * The events of the motion.
@@ -205,10 +206,10 @@ private:
 		return 0.5f - 0.5f * FMath::Cos(PI * Value);
 	}
 
-	float GetValue(const FString Id, const float Time) const
-	{
-		return CurveTable->FindRichCurve(*Id, Id)->Eval(Time, 0.0f);
-	}
+	/**
+	 * Evaluates the curve with the given ID at the given time. Returns 0 if the curve does not exist.
+	 */
+	float GetValue(const FString Id, const float Time) const;
 
 	float Weight;
 

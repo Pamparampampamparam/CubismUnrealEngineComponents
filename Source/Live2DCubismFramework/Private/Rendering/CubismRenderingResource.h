@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "Runtime/Launch/Resources/Version.h"
 #include "CubismDrawableDynamicMeshData.h"
 #include "CubismVertexBuffer.h"
 #include "CubismUshortIndexBuffer.h"

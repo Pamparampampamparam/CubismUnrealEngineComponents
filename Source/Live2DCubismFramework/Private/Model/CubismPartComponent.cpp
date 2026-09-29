@@ -10,8 +10,10 @@
 
 #include "Model/CubismParameterStoreComponent.h"
 #include "Model/CubismModelActor.h"
+#include "CubismLog.h"
 
 UCubismPartComponent::UCubismPartComponent()
+	: Index(-1)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_DuringPhysics;
@@ -25,7 +27,7 @@ void UCubismPartComponent::Setup(UCubismModelComponent* InModel)
 		return;
 	}
 
-	if ((Index < 0 || Index >= InModel->GetPartCount()) && !InModel->NonNativePartIds.Contains(Index))
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
 	{
 		return;
 	}
@@ -35,29 +37,65 @@ void UCubismPartComponent::Setup(UCubismModelComponent* InModel)
 		return;
 	}
 
+	const bool bNative = Index >= 0 && Index < InModel->GetPartCount();
+
+	if (!bNative && !InModel->NonNativePartIds.Contains(Index))
+	{
+		UE_LOG(LogCubism, Warning, TEXT("UCubismPartComponent::Setup: part index %d is unknown to model '%s'."), Index, *InModel->GetName());
+
+		return;
+	}
+
+	// A component that already has an ID was loaded or duplicated: its opacity is the one the user saved.
+	const bool bFirstSetup = Id.IsEmpty();
+
 	Model = InModel;
 
-	if (Index >= 0 && Index < InModel->GetPartCount())
+	if (bNative)
 	{
 		Id = Model->GetPartId(Index);
-		Opacity = Model->GetPartOpacity(Index);
 	}
 	else
 	{
 		Id = Model->NonNativePartIds[Index];
-		Opacity = 1.0f;
 	}
 
-	check(!FGenericPlatformMath::IsNaN(Opacity));
+	if (bFirstSetup)
+	{
+		Opacity = bNative ? Model->GetPartOpacity(Index) : 1.0f;
+
+		if (FGenericPlatformMath::IsNaN(Opacity))
+		{
+			Opacity = 1.0f;
+		}
+	}
+	else
+	{
+		Opacity = FMath::Clamp(Opacity, 0.0f, 1.0f);
+		Model->SetPartOpacity(Index, Opacity);
+	}
+}
+
+bool UCubismPartComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
 }
 
 void UCubismPartComponent::SetPartOpacity(float TargetOpacity)
 {
 	Opacity = TargetOpacity;
-	if (Model)
+
+	if (!HasValidModel())
 	{
-		Model->SetPartOpacity(Index, Opacity);
+		return;
 	}
+
+	Model->SetPartOpacity(Index, Opacity);
+}
+
+TObjectPtr<UCubismModelComponent> UCubismPartComponent::GetModel()
+{
+	return UCubismModelComponent::FindModelComponent(this);
 }
 
 // UObject interface
@@ -65,18 +103,12 @@ void UCubismPartComponent::PostLoad()
 {
 	Super::PostLoad();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	if (!Owner)
+	if (ModelComp)
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
 }
 
 #if WITH_EDITOR
@@ -88,13 +120,14 @@ void UCubismPartComponent::PostEditChangeProperty(FPropertyChangedEvent& Propert
 
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismPartComponent, Opacity))
 	{
-		if (!Model)
+		if (!HasValidModel())
 		{
 			return;
 		}
+
 		Model->SetPartOpacity(Index, Opacity);
 
-		if(Model->ParameterStore)
+		if (IsValid(Model->ParameterStore))
 		{
 			Model->ParameterStore->SavePartOpacity(Index);
 		}
@@ -108,18 +141,12 @@ void UCubismPartComponent::OnComponentCreated()
 {
 	Super::OnComponentCreated();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
-	if (!Owner)
+	if (ModelComp)
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
 }
 
 #if WITH_EDITOR
@@ -127,18 +154,10 @@ void UCubismPartComponent::PostEditUndo()
 {
 	Super::PostEditUndo();
 
-	const ACubismModel* Owner = Cast<ACubismModel>(GetOwner());
-
-	if (!Owner)
+	if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
 	{
-		return;
+		Setup(ModelComp);
 	}
-
-	if (!Owner->Model)
-	{
-		return;
-	}
-	Setup(Owner->Model);
 }
 #endif
 // End of UActorComponent interface

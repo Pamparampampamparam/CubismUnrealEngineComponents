@@ -51,6 +51,9 @@ public:
 	
 	~FCubismMaskRenderer();
 
+	int64 GetNumVertices() const { return NumVertices; }
+	int64 GetNumIndices() const { return NumIndices; }
+
 
 	/// Draws the mask textures for the given drawable components onto the specified render target resource.
 	static void DrawMeshes_RenderThread(FRHICommandList& RHICmdList, FTextureRenderTargetResource* MaskRenderTarget, const TArray<FDrawableInfo>& MaskDrawableInfoArray, ERHIFeatureLevel::Type FeatureLevel);
