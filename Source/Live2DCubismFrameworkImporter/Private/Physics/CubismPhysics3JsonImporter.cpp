@@ -47,7 +47,8 @@ bool FCubismPhysics3JsonImporter::ImportFromString(const FString& FileContent)
 	const TSharedPtr<FJsonObject>* Meta;
 	ASSERT(JsonObject->TryGetObjectField(TEXT("Meta"), Meta), "Failed to get Meta field.");
 	{
-		ASSERT((*Meta)->TryGetNumberField(TEXT("PhysicsSettingCount"), TotalInputCount), "Failed to get PhysicsSettingCount field.");
+		int32 PhysicsSettingCount = 0;
+		ASSERT((*Meta)->TryGetNumberField(TEXT("PhysicsSettingCount"), PhysicsSettingCount), "Failed to get PhysicsSettingCount field.");
 		ASSERT((*Meta)->TryGetNumberField(TEXT("TotalInputCount"), TotalInputCount), "Failed to get TotalInputCount field.");
 		ASSERT((*Meta)->TryGetNumberField(TEXT("TotalOutputCount"), TotalOutputCount), "Failed to get TotalOutputCount field.");
 		ASSERT((*Meta)->TryGetNumberField(TEXT("VertexCount"), TotalParticleCount), "Failed to get VertexCount field.");

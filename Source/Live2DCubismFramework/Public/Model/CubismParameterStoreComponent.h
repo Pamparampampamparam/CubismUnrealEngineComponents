@@ -55,6 +55,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void LoadParameters();
 
+	/**
+	 * @brief Whether the component is bound to a model that is ready to be queried.
+	 */
+	bool HasValidModel() const;
+
 private:
 	/**
 	 * @brief The constructor of the component.
@@ -65,7 +70,9 @@ private:
 
 	/**
 	 * The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
 	 */
+	UPROPERTY(Transient, DuplicateTransient)
 	TObjectPtr<UCubismModelComponent> Model;
 
 	/**

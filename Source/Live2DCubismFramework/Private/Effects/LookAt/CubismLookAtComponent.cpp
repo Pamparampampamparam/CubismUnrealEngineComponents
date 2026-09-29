@@ -14,6 +14,8 @@
 #include "Model/CubismParameterComponent.h"
 
 UCubismLookAtComponent::UCubismLookAtComponent()
+	: LastPosition(FVector::ZeroVector)
+	, CurrentVelocity(FVector::ZeroVector)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_DuringPhysics;
@@ -22,19 +24,24 @@ UCubismLookAtComponent::UCubismLookAtComponent()
 
 void UCubismLookAtComponent::Setup(UCubismModelComponent* InModel)
 {
-	check(InModel);
-
-	if (Model != InModel)
+	if (!InModel)
 	{
-		Model = InModel;
+		return;
 	}
+
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
+	{
+		return;
+	}
+
+	Model = InModel;
 
 	LastPosition = FVector::ZeroVector;
 	CurrentVelocity = FVector::ZeroVector;
 
 	if (Model->LookAt != this)
 	{
-		if (Model->LookAt)
+		if (IsValid(Model->LookAt))
 		{
 			Model->LookAt->DestroyComponent();
 		}
@@ -44,14 +51,14 @@ void UCubismLookAtComponent::Setup(UCubismModelComponent* InModel)
 	Model->AddTickPrerequisiteComponent(this); // model ticks after parameters are updated by components
 }
 
-TObjectPtr<UCubismModelComponent> UCubismLookAtComponent::GetModel() 
+bool UCubismLookAtComponent::HasValidModel() const
 {
-	if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
-	{
-		return ModelComp;
-	}
+	return IsValid(Model) && Model->IsModelReady();
+}
 
-	return nullptr;
+TObjectPtr<UCubismModelComponent> UCubismLookAtComponent::GetModel()
+{
+	return UCubismModelComponent::FindModelComponent(this);
 }
 
 // UObject interface
@@ -81,9 +88,33 @@ void UCubismLookAtComponent::OnComponentCreated()
 	}
 }
 
+void UCubismLookAtComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
+{
+	if (IsValid(Model) && Model->LookAt == this)
+	{
+		Model->LookAt = nullptr;
+	}
+
+	Super::OnComponentDestroyed(bDestroyingHierarchy);
+}
+
 void UCubismLookAtComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (!IsValid(Model))
+	{
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel())
+	{
+		return;
+	}
 
 	LastPosition = SmoothDamp(LastPosition, DeltaTime);
 
@@ -154,14 +185,14 @@ void UCubismLookAtComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 
 FVector UCubismLookAtComponent::SmoothDamp(const FVector CurrentValue, const float DeltaTime)
 {
-	// global(world) coordinates to local(object) coordinates
-	const FTransform Transform = Model->GetRelativeTransform();
-	FVector TargetValue = Transform.InverseTransformPosition(Target ? Target->GetActorLocation() : Transform.GetLocation());
+	// global(world) coordinates to local(model) coordinates
+	const FTransform Transform = Model->GetComponentTransform();
+	FVector TargetValue = Transform.InverseTransformPosition(IsValid(Target) ? Target->GetActorLocation() : Transform.GetLocation());
 
 	const float Scale = 100.0f / Model->GetPixelsPerUnit();
 	TargetValue = FVector(-TargetValue.Y, TargetValue.Z, TargetValue.X) * Scale;
 
-	const float Omega = 2.0f / Smoothing;
+	const float Omega = 2.0f / FMath::Max(Smoothing, KINDA_SMALL_NUMBER);
 	const float x = Omega * DeltaTime;
 	const float Invexp = 1.0f / (1.0f + x + 0.48f * x * x + 0.235f * x * x * x);
 

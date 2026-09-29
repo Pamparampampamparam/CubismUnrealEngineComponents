@@ -20,12 +20,17 @@ UCubismRaycastComponent::UCubismRaycastComponent()
 
 void UCubismRaycastComponent::Setup(UCubismModelComponent* InModel)
 {
-	check(InModel);
-
-	if (Model != InModel)
+	if (!InModel)
 	{
-		Model = InModel;
+		return;
 	}
+
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
+	{
+		return;
+	}
+
+	Model = InModel;
 
 	if (Json)
 	{
@@ -44,6 +49,11 @@ void UCubismRaycastComponent::Setup(UCubismModelComponent* InModel)
 	}
 }
 
+bool UCubismRaycastComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
+}
+
 void UCubismRaycastComponent::Raycast(
 	const FVector Origin,
 	const FVector Direction,
@@ -52,6 +62,11 @@ void UCubismRaycastComponent::Raycast(
 ) const
 {
 	Result.Empty();
+
+	if (!HasValidModel())
+	{
+		return;
+	}
 
 	const FVector NormDir = Direction.GetSafeNormal();
 
@@ -64,7 +79,7 @@ void UCubismRaycastComponent::Raycast(
 
 		UCubismDrawableComponent* Drawable = Model->GetDrawable(Parameter.Id);
 
-		if (!Drawable)
+		if (!IsValid(Drawable))
 		{
 			continue;
 		}
@@ -127,7 +142,7 @@ bool UCubismRaycastComponent::RaycastDrawable(
 			TArray<FVector> Positions;
 			for (const FVector2D& Position : Drawable->GetVertexPositions())
 			{
-				Positions.Add(Model->GetRelativeTransform().TransformPosition(Drawable->ToGlobalPosition(Position)));
+				Positions.Add(Transform.TransformPosition(Drawable->ToGlobalPosition(Position)));
 			}
 
 			if (!RayIntersectMesh(
@@ -158,8 +173,13 @@ bool UCubismRaycastComponent::RayIntersectMesh
 	FVector& HitPosition, float& HitTime
 )
 {
-	for (int32 i = 0; i < Indices.Num(); i += 3)
+	for (int32 i = 0; i + 2 < Indices.Num(); i += 3)
 	{
+		if (!Positions.IsValidIndex(Indices[i]) || !Positions.IsValidIndex(Indices[i + 1]) || !Positions.IsValidIndex(Indices[i + 2]))
+		{
+			continue;
+		}
+
 		const FVector T0 = Positions[Indices[i    ]];
 		const FVector T1 = Positions[Indices[i + 1]];
 		const FVector T2 = Positions[Indices[i + 2]];
@@ -212,6 +232,11 @@ bool UCubismRaycastComponent::RayIntersectTriangle
 
 	const float W = (E2 | Q) * InvDet;
 
+	if (Length <= 0.0f)
+	{
+		return false;
+	}
+
 	HitTime = W / Length;
 
 	if (HitTime < 0.0f || HitTime > 1.0f)
@@ -224,23 +249,9 @@ bool UCubismRaycastComponent::RayIntersectTriangle
 	return true;
 }
 
-TObjectPtr<UCubismModelComponent> UCubismRaycastComponent::GetModel() 
+TObjectPtr<UCubismModelComponent> UCubismRaycastComponent::GetModel()
 {
-	/*if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
-	{
-		return ModelComp;
-	}
-
-	return nullptr; */
-
-	AActor* Owner = GetOwner();
-	if (!Owner)
-	{
-		return nullptr;
-	}
-
-	return Owner->FindComponentByClass<UCubismModelComponent>();
-
+	return UCubismModelComponent::FindModelComponent(this);
 }
 
 // UObject interface
@@ -255,6 +266,25 @@ void UCubismRaycastComponent::PostLoad()
 		Setup(ModelComp);
 	}
 }
+
+#if WITH_EDITOR
+void UCubismRaycastComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	const FName PropertyName = PropertyChangedEvent.GetPropertyName();
+
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismRaycastComponent, Json))
+	{
+		const TObjectPtr<UCubismModelComponent> ModelComp = IsValid(Model) ? Model : GetModel();
+
+		if (ModelComp)
+		{
+			Setup(ModelComp);
+		}
+	}
+}
+#endif
 // End of UObject interface
 
 // UActorComponent interface
@@ -267,6 +297,20 @@ void UCubismRaycastComponent::OnComponentCreated()
 	if (ModelComp)
 	{
 		Setup(ModelComp);
+	}
+}
+
+void UCubismRaycastComponent::OnRegister()
+{
+	Super::OnRegister();
+
+	// The model may have been created after this component (e.g. Blueprint construction order).
+	if (!IsValid(Model))
+	{
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
 	}
 }
 // End of UActorComponent interface

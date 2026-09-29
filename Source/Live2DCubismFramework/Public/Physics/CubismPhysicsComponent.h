@@ -62,6 +62,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void Stabilization();
 
+	/**
+	 * @brief Whether the component is bound to a model that is ready to be queried.
+	 */
+	bool HasValidModel() const;
+
 private:
 	/**
 	 * @brief The constructor of the component.
@@ -72,7 +77,9 @@ private:
 
 	/**
 	 * @brief The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
 	 */
+	UPROPERTY(Transient, DuplicateTransient)
 	TObjectPtr<UCubismModelComponent> Model;
 
 	/**
@@ -129,13 +136,14 @@ public:
 	// UObject interface
 	virtual void PostLoad() override;
 
-#if WITH_EDITORONLY_DATA
+#if WITH_EDITOR
 	virtual void PostEditChangeProperty(struct FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	// End of UObject interface
 
 	// UActorComponent interface
 	virtual void OnComponentCreated() override;
+	virtual void OnComponentDestroyed(bool bDestroyingHierarchy) override;
 
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 	// End of UActorComponent interface

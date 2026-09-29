@@ -85,6 +85,11 @@ public:
 	UPROPERTY(EditAnywhere)
 	FString Id = TEXT("");
 
+	/**
+	 * The internal time of this parameter's oscillation (not saved).
+	 */
+	float ElapsedTime = 0.0f;
+
 public:
 	float CalcValue(const float Time, const float Min, const float Max);
 };

@@ -90,6 +90,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void Raycast(const FVector Origin, const FVector Direction, TArray<FCubismRaycastHit>& Result, const float Length = 10000.0f) const;
 
+	/**
+	 * @brief Whether the component is bound to a model that is ready to be queried.
+	 */
+	bool HasValidModel() const;
+
 private:
 	/**
 	 * @brief The constructor of the component.
@@ -100,7 +105,9 @@ private:
 
 	/**
 	 * The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
 	 */
+	UPROPERTY(Transient, DuplicateTransient)
 	TObjectPtr<UCubismModelComponent> Model;
 
 	/**
@@ -160,9 +167,14 @@ private:
 public:
 	// UObject interface
 	virtual void PostLoad() override;
+
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 	// End of UObject interface
 
 	// UActorComponent interface
 	virtual void OnComponentCreated() override;
+	virtual void OnRegister() override;
 	// End of UActorComponent interface
 };

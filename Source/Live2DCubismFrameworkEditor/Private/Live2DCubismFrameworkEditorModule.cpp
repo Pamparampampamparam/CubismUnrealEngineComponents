@@ -12,6 +12,7 @@
 
 #include "CubismModelParameterControllerWindow.h"
 #include "Model/CubismModelActor.h"
+#include "Model/CubismModelComponent.h"
 #include "Selection.h"
 
 #include "CubismLog.h"
@@ -97,8 +98,8 @@ private:
 				{
 					if (GEditor && GEditor->GetSelectedActors()->Num() > 0)
 					{
-						// check if the selected actor is a Cubism model actor
-						return Cast<ACubismModel>(GEditor->GetSelectedActors()->GetTop(ACubismModel::StaticClass())) != nullptr;
+						// check if a selected actor carries a Cubism model component
+						return FindSelectedModelActor() != nullptr;
 					}
 					return false;
 				})
@@ -116,15 +117,7 @@ private:
 
 	TSharedRef<SDockTab> OnSpawnPluginTab(const FSpawnTabArgs& SpawnTabArgs)
 	{
-		TWeakObjectPtr<ACubismModel> SelectedActor = nullptr;
-
-		if (GEditor && GEditor->GetSelectedActors()->Num() > 0)
-		{
-			if (ACubismModel* Selection = Cast<ACubismModel>(GEditor->GetSelectedActors()->GetTop(ACubismModel::StaticClass())))
-			{
-				SelectedActor = Selection;
-			}
-		}
+		TWeakObjectPtr<AActor> SelectedActor = FindSelectedModelActor();
 		
 		TSharedRef<SDockTab> ResultTab = SNew(SDockTab)
 			.Label(LOCTEXT("CubismModelParameterControllerTabTitle", "Cubism Model Parameter Controller"))
@@ -135,6 +128,28 @@ private:
 			];
 		
 		return ResultTab;
+	}
+
+	static AActor* FindSelectedModelActor()
+	{
+		if (!GEditor)
+		{
+			return nullptr;
+		}
+
+		USelection* SelectedActors = GEditor->GetSelectedActors();
+
+		for (int32 Index = 0; SelectedActors && Index < SelectedActors->Num(); ++Index)
+		{
+			AActor* Actor = Cast<AActor>(SelectedActors->GetSelectedObject(Index));
+
+			if (Actor && Actor->FindComponentByClass<UCubismModelComponent>())
+			{
+				return Actor;
+			}
+		}
+
+		return nullptr;
 	}
 
 private:

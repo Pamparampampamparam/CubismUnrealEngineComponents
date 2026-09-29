@@ -121,7 +121,7 @@ private:
 public:
 	// UObject interface
 	#if WITH_EDITOR
-	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent);
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	#endif
 	// End of UObject interface
 

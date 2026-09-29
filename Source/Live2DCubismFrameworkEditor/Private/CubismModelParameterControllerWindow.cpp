@@ -145,14 +145,26 @@ void SCubismModelParameterControllerWindow::HandleEditorSelectionChanged(const T
 	for (UObject* Obj : NewSelection)
 	{
 		AActor* Actor = Cast<AActor>(Obj);
-		if (ACubismModel* CubismActor = Cast<ACubismModel>(Actor))
+		if (Actor && Actor->FindComponentByClass<UCubismModelComponent>())
 		{
-			ModelActor = CubismActor;
+			ModelActor = Actor;
 			break;
 		}
 	}
 
 	RefreshTabs();
+}
+
+UCubismModelComponent* SCubismModelParameterControllerWindow::GetModel() const
+{
+	if (!ModelActor.IsValid())
+	{
+		return nullptr;
+	}
+
+	UCubismModelComponent* Model = ModelActor->FindComponentByClass<UCubismModelComponent>();
+
+	return (Model && Model->IsModelReady()) ? Model : nullptr;
 }
 
 void SCubismModelParameterControllerWindow::RefreshTabs()
@@ -173,7 +185,7 @@ void SCubismModelParameterControllerWindow::RefreshTabs()
 		return;
 	}
 
-	UCubismModelComponent* Model = ModelActor->Model;
+	UCubismModelComponent* Model = GetModel();
 	if (!Model)
 	{
 		ParametersContainer->SetContent(
@@ -208,15 +220,20 @@ TSharedPtr<SWidget> SCubismModelParameterControllerWindow::BuildParameterList()
 {
 	TSharedRef<SVerticalBox> VerticalBox = SNew(SVerticalBox);
 
-	if (!ModelActor.IsValid() || !ModelActor->Model)
+	UCubismModelComponent* Model = GetModel();
+
+	if (!Model)
 	{
 		return SNullWidget::NullWidget;
 	}
 
-	UCubismModelComponent* Model = ModelActor->Model;
-
 	for (UCubismParameterComponent* Parameter : Model->Parameters)
 	{
+		if (!IsValid(Parameter))
+		{
+			continue;
+		}
+
 		VerticalBox->AddSlot()
 		.AutoHeight()
 		.Padding(0.0f, 6.0f, 0.0f, 0.0f)
@@ -303,9 +320,10 @@ TSharedPtr<SWidget> SCubismModelParameterControllerWindow::BuildParameterList()
 				.Text(FText::FromString("Reset"))
 				.OnClicked_Lambda([this, Parameter]()
 				{
-					if (ModelActor.IsValid() && ModelActor->Model && ModelActor->Model->ParameterStore)
+					UCubismModelComponent* Model = GetModel();
+
+					if (Model && IsValid(Parameter) && IsValid(Model->ParameterStore))
 					{
-						UCubismModelComponent* Model = ModelActor->Model;
 						int32 Index = Model->GetParameterIndex(Parameter->Id);
 
 						Parameter->SetParameterValue(Parameter->DefaultValue);
@@ -324,15 +342,20 @@ TSharedPtr<SWidget> SCubismModelParameterControllerWindow::BuildPartList()
 {
 	TSharedRef<SVerticalBox> VerticalBox = SNew(SVerticalBox);
 
-	if (!ModelActor.IsValid() || !ModelActor->Model)
+	UCubismModelComponent* Model = GetModel();
+
+	if (!Model)
 	{
 		return SNullWidget::NullWidget;
 	}
 
-	UCubismModelComponent* Model = ModelActor->Model;
-
 	for (UCubismPartComponent* Part : Model->Parts)
 	{
+		if (!IsValid(Part))
+		{
+			continue;
+		}
+
 		VerticalBox->AddSlot()
 		.AutoHeight()
 		.Padding(0.0f, 6.0f, 0.0f, 0.0f)
@@ -421,9 +444,10 @@ TSharedPtr<SWidget> SCubismModelParameterControllerWindow::BuildPartList()
 
 void SCubismModelParameterControllerWindow::OnParameterNumericValueCommitted(float NewValue, const FString& ParameterId)
 {
-	if (ModelActor.IsValid() && ModelActor->Model && ModelActor->Model->ParameterStore)
+	UCubismModelComponent* Model = GetModel();
+
+	if (Model && IsValid(Model->ParameterStore))
 	{
-		UCubismModelComponent* Model = ModelActor->Model;
 
 		UCubismParameterComponent* Parameter = Model->GetParameter(ParameterId);
 		int32 Index = Model->GetParameterIndex(ParameterId);
@@ -439,9 +463,10 @@ void SCubismModelParameterControllerWindow::OnParameterNumericValueCommitted(flo
 
 void SCubismModelParameterControllerWindow::OnParameterSliderValueChanged(float NewValue, const FString& ParameterId)
 {
-	if (ModelActor.IsValid() && ModelActor->Model && ModelActor->Model->ParameterStore)
+	UCubismModelComponent* Model = GetModel();
+
+	if (Model && IsValid(Model->ParameterStore))
 	{
-		UCubismModelComponent* Model = ModelActor->Model;
 
 		UCubismParameterComponent* Parameter = Model->GetParameter(ParameterId);
 
@@ -455,9 +480,10 @@ void SCubismModelParameterControllerWindow::OnParameterSliderValueChanged(float 
 
 void SCubismModelParameterControllerWindow::OnPartNumericValueCommitted(float NewValue, const FString& PartId)
 {
-	if (ModelActor.IsValid() && ModelActor->Model && ModelActor->Model->ParameterStore)
+	UCubismModelComponent* Model = GetModel();
+
+	if (Model && IsValid(Model->ParameterStore))
 	{
-		UCubismModelComponent* Model = ModelActor->Model;
 
 		UCubismPartComponent* Part = Model->GetPart(PartId);
 
@@ -472,9 +498,10 @@ void SCubismModelParameterControllerWindow::OnPartNumericValueCommitted(float Ne
 
 void SCubismModelParameterControllerWindow::OnPartSliderValueChanged(float NewValue, const FString& PartId)
 {
-	if (ModelActor.IsValid() && ModelActor->Model && ModelActor->Model->ParameterStore)
+	UCubismModelComponent* Model = GetModel();
+
+	if (Model && IsValid(Model->ParameterStore))
 	{
-		UCubismModelComponent* Model = ModelActor->Model;
 
 		UCubismPartComponent* Part = Model->GetPart(PartId);
 

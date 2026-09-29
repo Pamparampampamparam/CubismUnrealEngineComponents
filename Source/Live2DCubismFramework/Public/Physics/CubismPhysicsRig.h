@@ -27,9 +27,9 @@ struct FCubismPhysicsRigInput
 	FCubismPhysicsParameter Source;
 
 	/** The index of the UCubismParameterComponent that the input parameter is applied to. */
-	int32 ParameterIndex;
-	/** The UCubismParameterComponent that is applied to the input parameter. */
-	TObjectPtr<UCubismParameterComponent> Parameter;
+	int32 ParameterIndex = -1;
+	/** The UCubismParameterComponent that is applied to the input parameter. Weak: the rig is not tracked by the garbage collector. */
+	TWeakObjectPtr<UCubismParameterComponent> Parameter;
 
 	/**
 	 * The function to get the normalized value of the input parameter.
@@ -67,20 +67,20 @@ struct FCubismPhysicsRigOutput
 	FCubismPhysicsParameter Destination;
 
 	/** The index of the UCubismParameterComponent that the output parameter is applied to. */
-	int32 ParameterIndex;
-	/** The UCubismParameterComponent that the output parameter is applied to. */
-	TObjectPtr<UCubismParameterComponent> Parameter;
+	int32 ParameterIndex = -1;
+	/** The UCubismParameterComponent that the output parameter is applied to. Weak: the rig is not tracked by the garbage collector. */
+	TWeakObjectPtr<UCubismParameterComponent> Parameter;
 	/** The translation scale value of the output parameter if it was output as a translation. */
-	FVector2D TranslationScale;
+	FVector2D TranslationScale = FVector2D::ZeroVector;
 	/** The minimum value of the output parameter. */
-	float ValueBelowMinimum;
+	float ValueBelowMinimum = 0.0f;
 	/** The maximum value of the output parameter. */
-	float ValueExceededMaximum;
+	float ValueExceededMaximum = 0.0f;
 
 	/** The output parameter in the previous frame. */
-	float PreviousValue;
+	float PreviousValue = 0.0f;
 	/** The output parameter in the current frame. */
-	float CurrentValue;
+	float CurrentValue = 0.0f;
 
 	/**
 	 * The function to update the output parameter value.

@@ -18,7 +18,10 @@ const float FrameRate = 30.0f;
 const float Epsilon = 0.01f;
 
 UCubismLipSyncComponent::UCubismLipSyncComponent()
-	: LipSyncTargetValue(0.0f)
+	: Time(0.0f)
+	, TargetValue(0.0f)
+	, CurrentVelocity(0.0f)
+	, LipSyncTargetValue(0.0f)
 	, LipSyncValue(0.0f)
 	, LipSyncVValue(0.0f)
 	, LastTimeSeconds(0.0f)
@@ -31,12 +34,17 @@ UCubismLipSyncComponent::UCubismLipSyncComponent()
 
 void UCubismLipSyncComponent::Setup(UCubismModelComponent* InModel)
 {
-	check(InModel);
-
-	if (Model != InModel)
+	if (!InModel)
 	{
-		Model = InModel;
+		return;
 	}
+
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
+	{
+		return;
+	}
+
+	Model = InModel;
 
 	Time = 0.0f;
 	TargetValue = 0.0f;
@@ -49,14 +57,14 @@ void UCubismLipSyncComponent::Setup(UCubismModelComponent* InModel)
 		Ids.Append(Json->LipSyncs);
 	}
 
-	if (!Audio)
+	if (!IsValid(Audio))
 	{
 		Audio = CreateAudioComponent();
 	}
 
 	if (Model->LipSync != this)
 	{
-		if (Model->LipSync)
+		if (IsValid(Model->LipSync))
 		{
 			Model->LipSync->DestroyComponent();
 		}
@@ -64,6 +72,11 @@ void UCubismLipSyncComponent::Setup(UCubismModelComponent* InModel)
 	}
 
 	Model->AddTickPrerequisiteComponent(this); // must update parameters on memory after parameter updated
+}
+
+bool UCubismLipSyncComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
 }
 
 UAudioComponent* UCubismLipSyncComponent::GetAudioComponent()
@@ -78,6 +91,11 @@ void UCubismLipSyncComponent::OnEnvelopeValue(const USoundWave* InSoundWave, con
 
 TObjectPtr<UAudioComponent> UCubismLipSyncComponent::CreateAudioComponent()
 {
+	if (!IsValid(Model))
+	{
+		return nullptr;
+	}
+
 	TObjectPtr<UAudioComponent> NewAudio = NewObject<UAudioComponent>(Model, NAME_None, RF_Transactional | RF_Transient);
 
 	NewAudio->OnAudioSingleEnvelopeValue.AddUniqueDynamic(this, &UCubismLipSyncComponent::OnEnvelopeValue);
@@ -119,129 +137,12 @@ TObjectPtr<UAudioComponent> UCubismLipSyncComponent::CreateAudioComponent()
 	return NewAudio;
 }
 
-TObjectPtr<UCubismModelComponent> UCubismLipSyncComponent::GetModel() 
+void UCubismLipSyncComponent::ApplyValue()
 {
-	if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
+	if (!HasValidModel())
 	{
-		return ModelComp;
+		return;
 	}
-
-	return nullptr;
-}
-
-// UObject interface
-void UCubismLipSyncComponent::PostLoad()
-{
-	Super::PostLoad();
-
-	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
-
-	if (ModelComp)
-	{
-		Setup(ModelComp);
-	}
-}
-
-#if WITH_EDITOR
-void UCubismLipSyncComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
-{
-	Super::PostEditChangeProperty(PropertyChangedEvent);
-
-	const FName PropertyName = PropertyChangedEvent.GetPropertyName();
-
-	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismLipSyncComponent, Value))
-	{
-		for (const FString& Id : Ids)
-		{
-			UCubismParameterComponent* Destination = Model->GetParameter(Id);
-
-			if (!Destination)
-			{
-				continue;
-			}
-
-			switch (BlendMode)
-			{
-				case ECubismParameterBlendMode::Overwrite:
-				{
-					Destination->SetParameterValue(Value);
-					break;
-				}
-				case ECubismParameterBlendMode::Additive:
-				{
-					Destination->AddParameterValue(Value);
-					break;
-				}
-				case ECubismParameterBlendMode::Multiplicative:
-				{
-					Destination->MultiplyParameterValue(Value);
-					break;
-				}
-				default:
-				{
-					ensure(false);
-					break;
-				}
-			}
-		}
-	}
-
-	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismLipSyncComponent, bAutoEnabled))
-	{
-		Time = 0.0f;
-
-		if (Audio)
-		{
-			Audio->bAutoActivate = !bAutoEnabled;
-		}
-	}
-
-	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismLipSyncComponent, Source))
-	{
-		if (Audio)
-		{
-			Audio->SetSound(Source);
-		}
-	}
-}
-#endif
-// End of UObject interface
-
-// UActorComponent interface.
-void UCubismLipSyncComponent::OnComponentCreated()
-{
-	Super::OnComponentCreated();
-
-	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
-
-	if (ModelComp)
-	{
-		Setup(ModelComp);
-	}
-}
-
-void UCubismLipSyncComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
-{
-	const AActor* Owner = GetOwner();
-
-	if (Audio && !Audio->IsBeingDestroyed())
-	{
-		if (Owner && Owner->GetWorld())
-		{
-			Audio->DetachFromComponent(FDetachmentTransformRules::KeepRelativeTransform);
-		}
-		Audio->DestroyComponent();
-		Audio = nullptr;
-	}
-
-	Super::OnComponentDestroyed(bDestroyingHierarchy);
-}
-
-void UCubismLipSyncComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
-{
-	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-
-	Update(DeltaTime);
 
 	for (const FString& Id : Ids)
 	{
@@ -277,6 +178,124 @@ void UCubismLipSyncComponent::TickComponent(float DeltaTime, ELevelTick TickType
 		}
 	}
 }
+
+TObjectPtr<UCubismModelComponent> UCubismLipSyncComponent::GetModel()
+{
+	return UCubismModelComponent::FindModelComponent(this);
+}
+
+// UObject interface
+void UCubismLipSyncComponent::PostLoad()
+{
+	Super::PostLoad();
+
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
+
+	if (ModelComp)
+	{
+		Setup(ModelComp);
+	}
+}
+
+#if WITH_EDITOR
+void UCubismLipSyncComponent::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	const FName PropertyName = PropertyChangedEvent.GetPropertyName();
+
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismLipSyncComponent, Value))
+	{
+		ApplyValue();
+	}
+
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismLipSyncComponent, bAutoEnabled))
+	{
+		Time = 0.0f;
+
+		if (IsValid(Audio))
+		{
+			Audio->bAutoActivate = !bAutoEnabled;
+		}
+	}
+
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismLipSyncComponent, Source))
+	{
+		if (IsValid(Audio))
+		{
+			Audio->SetSound(Source);
+		}
+	}
+
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismLipSyncComponent, Json))
+	{
+		if (Json)
+		{
+			Ids.Empty();
+			Ids.Append(Json->LipSyncs);
+		}
+	}
+}
+#endif
+// End of UObject interface
+
+// UActorComponent interface.
+void UCubismLipSyncComponent::OnComponentCreated()
+{
+	Super::OnComponentCreated();
+
+	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
+
+	if (ModelComp)
+	{
+		Setup(ModelComp);
+	}
+}
+
+void UCubismLipSyncComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
+{
+	const AActor* Owner = GetOwner();
+
+	if (IsValid(Audio) && !Audio->IsBeingDestroyed())
+	{
+		if (Owner && Owner->GetWorld())
+		{
+			Audio->DetachFromComponent(FDetachmentTransformRules::KeepRelativeTransform);
+		}
+		Audio->DestroyComponent();
+	}
+	Audio = nullptr;
+
+	if (IsValid(Model) && Model->LipSync == this)
+	{
+		Model->LipSync = nullptr;
+	}
+
+	Super::OnComponentDestroyed(bDestroyingHierarchy);
+}
+
+void UCubismLipSyncComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (!IsValid(Model))
+	{
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel())
+	{
+		return;
+	}
+
+	Update(DeltaTime);
+
+	ApplyValue();
+}
 // End of UActorComponent interface.
 
 void UCubismLipSyncComponent::Update(const float DeltaTime)
@@ -294,7 +313,9 @@ void UCubismLipSyncComponent::Update(const float DeltaTime)
 
 float UCubismLipSyncComponent::SmoothDamp(const float CurrentValue, const float DeltaTime)
 {
-	LipSyncTargetValue = TargetValue - CurrentValue;
+	// The smoothed value chases the envelope target directly. Subtracting the current value here
+	// (as the original code did) made the mouth converge to half of the target amplitude.
+	LipSyncTargetValue = TargetValue;
 
 	UserTimeSeconds += DeltaTime;
 
@@ -330,7 +351,7 @@ float UCubismLipSyncComponent::SmoothDamp(const float CurrentValue, const float 
 	const float A = FMath::Sqrt((AX * AX));
 
 
-	if (A < -MaxA || A > MaxA)
+	if (A > MaxA && A > 0.0f)
 	{
 		AX *= MaxA / A;
 	}
@@ -341,7 +362,7 @@ float UCubismLipSyncComponent::SmoothDamp(const float CurrentValue, const float 
 		const float MaxVelocity = 0.5f * (FMath::Sqrt((MaxA * MaxA) + 16.0f * MaxA * D - 8.0f * MaxA * D) - MaxA);
 		const float CurVelocity = FMath::Sqrt(LipSyncVValue * LipSyncVValue);
 
-		if (CurVelocity > MaxVelocity)
+		if (CurVelocity > MaxVelocity && CurVelocity > 0.0f)
 		{
 			LipSyncVValue *= MaxVelocity / CurVelocity;
 		}
@@ -349,5 +370,5 @@ float UCubismLipSyncComponent::SmoothDamp(const float CurrentValue, const float 
 
 	LipSyncValue += LipSyncVValue;
 
-	return LipSyncValue;
+	return FMath::Clamp(LipSyncValue, 0.0f, 1.0f);
 }

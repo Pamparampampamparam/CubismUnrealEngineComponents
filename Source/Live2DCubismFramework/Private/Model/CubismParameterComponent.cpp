@@ -10,10 +10,17 @@
 
 #include "Model/CubismParameterStoreComponent.h"
 #include "Model/CubismModelActor.h"
+#include "CubismLog.h"
 
 #include "Live2DCubismCore.h"
 
 UCubismParameterComponent::UCubismParameterComponent()
+	: Index(-1)
+	, Type(ECubismParameterType::Normal)
+	, MinimumValue(0.0f)
+	, MaximumValue(1.0f)
+	, DefaultValue(0.0f)
+	, Value(0.0f)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_DuringPhysics;
@@ -22,24 +29,42 @@ UCubismParameterComponent::UCubismParameterComponent()
 
 void UCubismParameterComponent::Setup(UCubismModelComponent* InModel)
 {
-	check(InModel);
-	check(Index >= 0 && Index < InModel->GetParameterCount() || InModel->NonNativeParameterIds.Contains(Index));
+	if (!InModel)
+	{
+		return;
+	}
+
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
+	{
+		return;
+	}
 
 	if (Model == InModel)
 	{
 		return;
 	}
 
+	const bool bNative = Index >= 0 && Index < InModel->GetParameterCount();
+
+	if (!bNative && !InModel->NonNativeParameterIds.Contains(Index))
+	{
+		UE_LOG(LogCubism, Warning, TEXT("UCubismParameterComponent::Setup: parameter index %d is unknown to model '%s'."), Index, *InModel->GetName());
+
+		return;
+	}
+
+	// A component that already has an ID was loaded or duplicated: its value is the one the user saved.
+	const bool bFirstSetup = Id.IsEmpty();
+
 	Model = InModel;
 
-	if (Index >= 0 && Index < InModel->GetParameterCount())
+	if (bNative)
 	{
 		Id = Model->GetParameterId(Index);
 		Type = Model->GetParameterType(Index);
 		MaximumValue = Model->GetParameterMaximumValue(Index);
 		MinimumValue = Model->GetParameterMinimumValue(Index);
 		DefaultValue = Model->GetParameterDefaultValue(Index);
-		Value = Model->GetParameterValue(Index);
 	}
 	else
 	{
@@ -48,16 +73,38 @@ void UCubismParameterComponent::Setup(UCubismModelComponent* InModel)
 		MaximumValue = 1.0f;
 		MinimumValue = 0.0f;
 		DefaultValue = 0.0f;
-		Value = 0.0f;
 	}
 
-	check(!FGenericPlatformMath::IsNaN(MaximumValue));
-	check(!FGenericPlatformMath::IsNaN(MinimumValue));
-	check(MaximumValue > MinimumValue);
+	if (FGenericPlatformMath::IsNaN(MinimumValue) || FGenericPlatformMath::IsNaN(MaximumValue) || !(MaximumValue > MinimumValue))
+	{
+		MinimumValue = 0.0f;
+		MaximumValue = 1.0f;
+	}
+
+	if (bFirstSetup)
+	{
+		Value = Model->GetParameterValue(Index);
+	}
+	else
+	{
+		// Push the saved value into the freshly created raw model.
+		Value = FMath::Clamp(Value, MinimumValue, MaximumValue);
+		Model->SetParameterValue(Index, Value);
+	}
+}
+
+bool UCubismParameterComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
 }
 
 void UCubismParameterComponent::SetParameterValue(float TargetValue, const float Weight)
 {
+	if (!HasValidModel())
+	{
+		return;
+	}
+
 	float CurrentValue = Weight == 1.0f? TargetValue : Model->GetParameterValue(Index) * (1.0f - Weight) + TargetValue * Weight;
 
 	if (!FGenericPlatformMath::IsNaN(MinimumValue) && !FGenericPlatformMath::IsNaN(MaximumValue))
@@ -72,6 +119,11 @@ void UCubismParameterComponent::SetParameterValue(float TargetValue, const float
 
 void UCubismParameterComponent::AddParameterValue(float TargetValue, const float Weight)
 {
+	if (!HasValidModel())
+	{
+		return;
+	}
+
 	float CurrentValue = Model->GetParameterValue(Index) + TargetValue * Weight;
 
 	if (!FGenericPlatformMath::IsNaN(MinimumValue) && !FGenericPlatformMath::IsNaN(MaximumValue))
@@ -86,6 +138,11 @@ void UCubismParameterComponent::AddParameterValue(float TargetValue, const float
 
 void UCubismParameterComponent::MultiplyParameterValue(float TargetValue, const float Weight)
 {
+	if (!HasValidModel())
+	{
+		return;
+	}
+
 	float CurrentValue = Model->GetParameterValue(Index) * (1.0f + (TargetValue - 1.0f) * Weight);
 
 	if (!FGenericPlatformMath::IsNaN(MinimumValue) && !FGenericPlatformMath::IsNaN(MaximumValue))
@@ -98,14 +155,9 @@ void UCubismParameterComponent::MultiplyParameterValue(float TargetValue, const 
 	Model->SetParameterValue(Index, CurrentValue);
 }
 
-TObjectPtr<UCubismModelComponent> UCubismParameterComponent::GetModel() 
+TObjectPtr<UCubismModelComponent> UCubismParameterComponent::GetModel()
 {
-	if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
-	{
-		return ModelComp;
-	}
-
-	return nullptr;
+	return UCubismModelComponent::FindModelComponent(this);
 }
 
 // UObject interface
@@ -130,9 +182,16 @@ void UCubismParameterComponent::PostEditChangeProperty(FPropertyChangedEvent& Pr
 
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismParameterComponent, Value))
 	{
+		if (!HasValidModel())
+		{
+			return;
+		}
+
+		Value = FMath::Clamp(Value, MinimumValue, MaximumValue);
+
 		Model->SetParameterValue(Index, Value);
 
-		if(Model->ParameterStore)
+		if (IsValid(Model->ParameterStore))
 		{
 			Model->ParameterStore->SaveParameterValue(Index);
 		}

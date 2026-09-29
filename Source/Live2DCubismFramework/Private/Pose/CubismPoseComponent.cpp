@@ -12,7 +12,6 @@
 #include "Model/CubismParameterComponent.h"
 #include "Model/CubismPartComponent.h"
 #include "Model/CubismModelActor.h"
-#include "Model/CubismModelComponent.h"
 #include "Model/CubismParameterStoreComponent.h"
 #include "Motion/CubismMotionComponent.h"
 #include "Pose/CubismPose3Json.h"
@@ -24,6 +23,7 @@ const float Phi = 0.5f;
 const float BackOpacityThreshold = 0.15f;
 
 UCubismPoseComponent::UCubismPoseComponent()
+	: FadeInTime(DefaultFadeInSeconds)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
@@ -32,22 +32,25 @@ UCubismPoseComponent::UCubismPoseComponent()
 
 void UCubismPoseComponent::Setup(UCubismModelComponent* InModel)
 {
-	check(InModel);
-
-	if (Model != InModel)
+	if (!InModel)
 	{
-		Model = InModel;
+		return;
 	}
 
-	FadeInTime = DefaultFadeInSeconds;
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
+	{
+		return;
+	}
+
+	Model = InModel;
+
+	PartGroups.Empty();
 
 	if (Json)
 	{
-		PartGroups.Empty();
-
 		FadeInTime = Json->FadeInTime;
 
-		if (FadeInTime < 0.0f)
+		if (FadeInTime <= 0.0f)
 		{
 			FadeInTime = DefaultFadeInSeconds;
 		}
@@ -63,9 +66,14 @@ void UCubismPoseComponent::Setup(UCubismModelComponent* InModel)
 				PartParam.Part = Model->GetPart(Part.Id);
 				PartParam.Parameter = Model->GetParameter(Part.Id);
 
+				if (!PartParam.Part.IsValid() || !PartParam.Parameter.IsValid())
+				{
+					continue;
+				}
+
 				for (const FString& LinkId : Part.Links)
 				{
-					if (const TObjectPtr<UCubismPartComponent>& LinkPart = Model->GetPart(LinkId))
+					if (UCubismPartComponent* LinkPart = Model->GetPart(LinkId))
 					{
 						PartParam.LinkParts.Add(LinkPart);
 					}
@@ -74,31 +82,41 @@ void UCubismPoseComponent::Setup(UCubismModelComponent* InModel)
 				Group.Parts.Add(PartParam);
 			}
 
-			PartGroups.Add(Group);
+			if (Group.Parts.Num() > 0)
+			{
+				PartGroups.Add(Group);
+			}
 		}
 	}
 
 	if (Model->Pose != this)
 	{
-		if (Model->Pose)
+		if (IsValid(Model->Pose))
 		{
 			Model->Pose->DestroyComponent();
 		}
 		Model->Pose = this;
 	}
 
-	AddTickPrerequisiteComponent(Model->ParameterStore); // must be updated after parameters loaded
-	AddTickPrerequisiteComponent(Model->Motion); // must be updated at first because motions overwrite parameters
-}
-
-TObjectPtr<UCubismModelComponent> UCubismPoseComponent::GetModel() 
-{
-	if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
+	if (IsValid(Model->ParameterStore))
 	{
-		return ModelComp;
+		AddTickPrerequisiteComponent(Model->ParameterStore); // must be updated after parameters loaded
 	}
 
-	return nullptr;
+	if (IsValid(Model->Motion))
+	{
+		AddTickPrerequisiteComponent(Model->Motion); // must be updated at first because motions overwrite parameters
+	}
+}
+
+bool UCubismPoseComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
+}
+
+TObjectPtr<UCubismModelComponent> UCubismPoseComponent::GetModel()
+{
+	return UCubismModelComponent::FindModelComponent(this);
 }
 
 // UObject interface
@@ -123,7 +141,12 @@ void UCubismPoseComponent::PostEditChangeProperty(struct FPropertyChangedEvent& 
 
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismPoseComponent, Json))
 	{
-		Setup(Model);
+		const TObjectPtr<UCubismModelComponent> ModelComp = IsValid(Model) ? Model : GetModel();
+
+		if (ModelComp)
+		{
+			Setup(ModelComp);
+		}
 	}
 }
 #endif
@@ -142,26 +165,41 @@ void UCubismPoseComponent::OnComponentCreated()
 	}
 }
 
+void UCubismPoseComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
+{
+	if (IsValid(Model) && Model->Pose == this)
+	{
+		Model->Pose = nullptr;
+	}
+
+	PartGroups.Empty();
+
+	Super::OnComponentDestroyed(bDestroyingHierarchy);
+}
+
 void UCubismPoseComponent::DoFade(float DeltaTime)
 {
+	UCubismParameterStoreComponent* ParameterStore = Model->ParameterStore;
+
 	for (const FCubismPosePartGroupParameter& PartGroup : PartGroups)
 	{
-		check(PartGroup.Parts.Num() > 0);
+		if (PartGroup.Parts.Num() == 0)
+		{
+			continue;
+		}
 
 		// default visible part and its opacity
-		TObjectPtr<UCubismPartComponent> VisiblePart = PartGroup.Parts[0].Part;
-
-		check(VisiblePart);
+		UCubismPartComponent* VisiblePart = PartGroup.Parts[0].Part.Get();
 
 		float NewOpacity = 1.0f;
 
 		// find the visible part in a group
 		for (const FCubismPosePartParameter& PartParam : PartGroup.Parts)
 		{
-			const TObjectPtr<UCubismPartComponent>& Part = PartParam.Part;
-			const TObjectPtr<UCubismParameterComponent>& Parameter = PartParam.Parameter;
+			UCubismPartComponent* Part = PartParam.Part.Get();
+			const UCubismParameterComponent* Parameter = PartParam.Parameter.Get();
 
-			if (!Part || !Parameter || !(Parameter->Value > Epsilon))
+			if (!IsValid(Part) || !IsValid(Parameter) || !(Parameter->Value > Epsilon))
 			{
 				continue;
 			}
@@ -175,8 +213,19 @@ void UCubismPoseComponent::DoFade(float DeltaTime)
 			}
 		}
 
-		// FIXME: There is a possibility of division by zero, but the fix will be applied after addressing the issue in other SDKs.
-		NewOpacity += DeltaTime / FadeInTime;
+		if (!IsValid(VisiblePart))
+		{
+			continue;
+		}
+
+		if (FadeInTime > 0.0f)
+		{
+			NewOpacity += DeltaTime / FadeInTime;
+		}
+		else
+		{
+			NewOpacity = 1.0f;
+		}
 
 		if (NewOpacity > 1.0f)
 		{
@@ -185,9 +234,9 @@ void UCubismPoseComponent::DoFade(float DeltaTime)
 
 		for (const FCubismPosePartParameter& PartParam : PartGroup.Parts)
 		{
-			const TObjectPtr<UCubismPartComponent>& Part = PartParam.Part;
+			UCubismPartComponent* Part = PartParam.Part.Get();
 
-			if (!Part)
+			if (!IsValid(Part))
 			{
 				continue;
 			}
@@ -214,7 +263,7 @@ void UCubismPoseComponent::DoFade(float DeltaTime)
 
 				const float BackOpacity = (1.0f - A1) * (1.0f - NewOpacity);
 
-				if (BackOpacity > BackOpacityThreshold)
+				if (BackOpacity > BackOpacityThreshold && NewOpacity < 1.0f)
 				{
 					A1 = 1.0f - BackOpacityThreshold / (1.0f - NewOpacity);
 				}
@@ -227,29 +276,47 @@ void UCubismPoseComponent::DoFade(float DeltaTime)
 				Part->SetPartOpacity(Opacity);
 			}
 
-			Model->ParameterStore->SavePartOpacity(Part->Index);
+			if (IsValid(ParameterStore))
+			{
+				ParameterStore->SavePartOpacity(Part->Index);
+			}
 		}
 	}
 }
 
 void UCubismPoseComponent::CopyPartOpacities()
 {
+	UCubismParameterStoreComponent* ParameterStore = Model->ParameterStore;
+
 	// apply opacity to linked parts
 	for (const FCubismPosePartGroupParameter& PartGroup : PartGroups)
 	{
 		for (const FCubismPosePartParameter& PartParam : PartGroup.Parts)
 		{
-			if (PartParam.LinkParts.Num() == 0)
+			const UCubismPartComponent* Part = PartParam.Part.Get();
+
+			if (PartParam.LinkParts.Num() == 0 || !IsValid(Part))
 			{
 				continue; // no linked parts
 			}
 
-			const float Opacity = PartParam.Part->Opacity;
+			const float Opacity = Part->Opacity;
 
-			for (const TObjectPtr<UCubismPartComponent>& LinkPart : PartParam.LinkParts)
+			for (const TWeakObjectPtr<UCubismPartComponent>& WeakLinkPart : PartParam.LinkParts)
 			{
+				UCubismPartComponent* LinkPart = WeakLinkPart.Get();
+
+				if (!IsValid(LinkPart))
+				{
+					continue;
+				}
+
 				LinkPart->SetPartOpacity(Opacity);
-				Model->ParameterStore->SavePartOpacity(LinkPart->Index);
+
+				if (IsValid(ParameterStore))
+				{
+					ParameterStore->SavePartOpacity(LinkPart->Index);
+				}
 			}
 		}
 	}
@@ -258,6 +325,20 @@ void UCubismPoseComponent::CopyPartOpacities()
 void UCubismPoseComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (!IsValid(Model))
+	{
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel())
+	{
+		return;
+	}
 
 	DoFade(DeltaTime);
 

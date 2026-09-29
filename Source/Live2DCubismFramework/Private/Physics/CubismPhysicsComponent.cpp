@@ -14,6 +14,7 @@
 #include "Physics/CubismPhysicsRig.h"
 #include "Physics/CubismPhysics3Json.h"
 #include "CubismMath.h"
+#include "CubismLog.h"
 #include "Live2DCubismCore.h"
 
 const float AirResistance = 5.0f;
@@ -22,6 +23,7 @@ const float MovementThreshold = 0.001f;
 const float MaxDeltaTime = 5.0f;
 
 UCubismPhysicsComponent::UCubismPhysicsComponent()
+	: CurrentRemainTime(0.0f)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_DuringPhysics;
@@ -30,37 +32,24 @@ UCubismPhysicsComponent::UCubismPhysicsComponent()
 
 void UCubismPhysicsComponent::Setup(UCubismModelComponent* InModel)
 {
-	check(InModel);
-
-	if (Model != InModel)
+	if (!InModel)
 	{
-		Model = InModel;
-
-		const int32 ParameterCount = Model->GetParameterCount();
-
-		if (ParameterCaches.Num() != ParameterCount)
-		{
-			ParameterCaches.SetNum(ParameterCount);
-		}
-
-		if (ParameterInputCaches.Num() != ParameterCount)
-		{
-			ParameterInputCaches.SetNum(ParameterCount);
-		}
-
-		for (int32 ParameterIndex = 0; ParameterIndex < ParameterCount; ++ParameterIndex)
-		{
-			const UCubismParameterComponent* Parameter = Model->GetParameter(ParameterIndex);
-
-			ParameterCaches[ParameterIndex] = Parameter->Value;
-			ParameterInputCaches[ParameterIndex] = Parameter->Value;
-		}
+		return;
 	}
+
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
+	{
+		return;
+	}
+
+	Model = InModel;
+
+	CurrentRemainTime = 0.0f;
+
+	Rigs.Empty();
 
 	if (Json)
 	{
-		Rigs.Empty();
-
 		Gravity = Json->Gravity;
 		Wind = Json->Wind;
 		Fps = Json->Fps;
@@ -83,6 +72,13 @@ void UCubismPhysicsComponent::Setup(UCubismModelComponent* InModel)
 				RigInput.Type = Input.Type;
 				RigInput.Source = Input.Source;
 
+				if (RigInput.ParameterIndex < 0 || !RigInput.Parameter.IsValid())
+				{
+					UE_LOG(LogCubism, Warning, TEXT("UCubismPhysicsComponent::Setup: input parameter '%s' was not found."), *Input.Source.Id);
+
+					continue;
+				}
+
 				Rig.Inputs.Add(RigInput);
 			}
 
@@ -98,6 +94,18 @@ void UCubismPhysicsComponent::Setup(UCubismModelComponent* InModel)
 				RigOutput.bReflect = Output.bReflect;
 				RigOutput.Type = Output.Type;
 				RigOutput.Destination = Output.Destination;
+				RigOutput.TranslationScale = FVector2D::ZeroVector;
+				RigOutput.ValueBelowMinimum = 0.0f;
+				RigOutput.ValueExceededMaximum = 0.0f;
+				RigOutput.PreviousValue = 0.0f;
+				RigOutput.CurrentValue = 0.0f;
+
+				if (RigOutput.ParameterIndex < 0 || !RigOutput.Parameter.IsValid())
+				{
+					UE_LOG(LogCubism, Warning, TEXT("UCubismPhysicsComponent::Setup: output parameter '%s' was not found."), *Output.Destination.Id);
+
+					continue;
+				}
 
 				Rig.Outputs.Add(RigOutput);
 			}
@@ -111,8 +119,32 @@ void UCubismPhysicsComponent::Setup(UCubismModelComponent* InModel)
 				RigParticle.Acceleration = Particle.Acceleration;
 				RigParticle.Radius = Particle.Radius;
 				RigParticle.Position = Particle.Position;
+				RigParticle.InitialPosition = FVector2D::ZeroVector;
+				RigParticle.LastPosition = FVector2D::ZeroVector;
+				RigParticle.LastGravity = FVector2D(0.0f, 1.0f);
+				RigParticle.Force = FVector2D::ZeroVector;
+				RigParticle.Velocity = FVector2D::ZeroVector;
 
 				Rig.Particles.Add(RigParticle);
+			}
+
+			// A rig needs at least the root particle and one moving particle to produce output.
+			if (Rig.Particles.Num() < 2)
+			{
+				continue;
+			}
+
+			// Outputs referencing particles that do not exist would read out of bounds.
+			for (int32 OutputIndex = Rig.Outputs.Num() - 1; OutputIndex >= 0; --OutputIndex)
+			{
+				const int32 ParticleIndex = Rig.Outputs[OutputIndex].ParticleIndex;
+
+				if (ParticleIndex < 1 || ParticleIndex >= Rig.Particles.Num())
+				{
+					UE_LOG(LogCubism, Warning, TEXT("UCubismPhysicsComponent::Setup: output '%s' references particle %d which does not exist."), *Rig.Outputs[OutputIndex].Destination.Id, ParticleIndex);
+
+					Rig.Outputs.RemoveAt(OutputIndex);
+				}
 			}
 
 			Rigs.Add(Rig);
@@ -121,9 +153,27 @@ void UCubismPhysicsComponent::Setup(UCubismModelComponent* InModel)
 		Initialize();
 	}
 
+	// Resolving the rig parameters above may have registered parameters that are not part of the moc,
+	// so the caches are sized after the rigs are built and cover the non-native parameters too.
+	{
+		const int32 ParameterCount = Model->Parameters.Num();
+
+		ParameterCaches.SetNum(ParameterCount);
+		ParameterInputCaches.SetNum(ParameterCount);
+
+		for (int32 ParameterIndex = 0; ParameterIndex < ParameterCount; ++ParameterIndex)
+		{
+			const UCubismParameterComponent* Parameter = Model->GetParameter(ParameterIndex);
+			const float Value = Parameter ? Parameter->Value : 0.0f;
+
+			ParameterCaches[ParameterIndex] = Value;
+			ParameterInputCaches[ParameterIndex] = Value;
+		}
+	}
+
 	if (Model->Physics != this)
 	{
-		if (Model->Physics)
+		if (IsValid(Model->Physics))
 		{
 			Model->Physics->DestroyComponent();
 		}
@@ -131,6 +181,11 @@ void UCubismPhysicsComponent::Setup(UCubismModelComponent* InModel)
 	}
 
 	Model->AddTickPrerequisiteComponent(this); // model ticks after parameters are updated by components
+}
+
+bool UCubismPhysicsComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
 }
 
 void UCubismPhysicsComponent::Initialize()
@@ -148,19 +203,35 @@ void UCubismPhysicsComponent::Initialize()
 			Particle.LastPosition = Particle.InitialPosition;
 			Particle.LastGravity = FVector2D(0.0f, 1.0f);
 			Particle.Velocity = FVector2D::ZeroVector;
+			Particle.Force = FVector2D::ZeroVector;
 		}
 	}
 }
 
 void UCubismPhysicsComponent::Stabilization()
 {
+	if (!HasValidModel())
+	{
+		return;
+	}
+
 	for (FCubismPhysicsRig& Rig : Rigs)
 	{
+		if (Rig.Particles.Num() == 0)
+		{
+			continue;
+		}
+
 		FVector2D TotalTranslation = FVector2D::ZeroVector;
 		float TotalAngle = 0.0f;
 
 		for (FCubismPhysicsRigInput& Input : Rig.Inputs)
 		{
+			if (!Input.Parameter.IsValid() || !ParameterCaches.IsValidIndex(Input.ParameterIndex))
+			{
+				continue;
+			}
+
 			const float Value = Input.Parameter->Value;
 
 			Input.GetNormalizedParameterValue(TotalTranslation, TotalAngle, Value, Rig.NormalizationPosition, Rig.NormalizationAngle);
@@ -170,8 +241,11 @@ void UCubismPhysicsComponent::Stabilization()
 
 		const float RadAngle = -TotalAngle * (PI / 180.0f);
 
-		TotalTranslation.X = FMath::Cos(RadAngle) * TotalTranslation.X - FMath::Sin(RadAngle) * TotalTranslation.Y;
-		TotalTranslation.Y = FMath::Sin(RadAngle) * TotalTranslation.X + FMath::Cos(RadAngle) * TotalTranslation.Y;
+		const FVector2D RotatedTranslation(
+			FMath::Cos(RadAngle) * TotalTranslation.X - FMath::Sin(RadAngle) * TotalTranslation.Y,
+			FMath::Sin(RadAngle) * TotalTranslation.X + FMath::Cos(RadAngle) * TotalTranslation.Y
+		);
+		TotalTranslation = RotatedTranslation;
 
 		UpdateParticlesForStabilization(
 			Rig.Particles,
@@ -182,6 +256,11 @@ void UCubismPhysicsComponent::Stabilization()
 
 		for (FCubismPhysicsRigOutput& Output : Rig.Outputs)
 		{
+			if (!Output.Parameter.IsValid() || !ParameterCaches.IsValidIndex(Output.ParameterIndex))
+			{
+				continue;
+			}
+
 			if (1 <= Output.ParticleIndex && Output.ParticleIndex < Rig.Particles.Num())
 			{
 				const float OutputValue = Output.GetValue(Rig.Particles, Gravity);
@@ -210,6 +289,11 @@ void UCubismPhysicsComponent::UpdateParticles(
 	const float Resistance
 )
 {
+	if (Strand.Num() == 0)
+	{
+		return;
+	}
+
 	Strand[0].Position.X = TotalTranslation.X;
 	Strand[0].Position.Y = TotalTranslation.Y;
 
@@ -226,10 +310,13 @@ void UCubismPhysicsComponent::UpdateParticles(
 		const float Delay = Strand[i].Delay * DeltaTime * 30.0f;
 
 		FVector2D Direction = Strand[i].Position - Strand[i - 1].Position;
-	
+
 		const float Radian = FCubismMath::DirectionToRadian(Strand[i].LastGravity, CurrentGravity) / Resistance;
-		Direction.X = (FMath::Cos(Radian) * Direction.X) - (Direction.Y * FMath::Sin(Radian));
-		Direction.Y = (FMath::Sin(Radian) * Direction.X) + (Direction.Y * FMath::Cos(Radian));
+		const FVector2D RotatedDirection(
+			(FMath::Cos(Radian) * Direction.X) - (Direction.Y * FMath::Sin(Radian)),
+			(FMath::Sin(Radian) * Direction.X) + (Direction.Y * FMath::Cos(Radian))
+		);
+		Direction = RotatedDirection;
 
 		Strand[i].Position = Strand[i - 1].Position + Direction;
 
@@ -243,8 +330,6 @@ void UCubismPhysicsComponent::UpdateParticles(
 		NewDirection.Normalize();
 
 		Strand[i].Position = Strand[i - 1].Position + (NewDirection * Strand[i].Radius);
-
-		Direction = Strand[i].Radius * Direction.GetSafeNormal();
 
 		if (FMath::Abs(Strand[i].Position.X) < ThresholdValue)
 		{
@@ -270,6 +355,11 @@ void UCubismPhysicsComponent::UpdateParticlesForStabilization(
 	const float ThresholdValue
 )
 {
+	if (Particles.Num() == 0)
+	{
+		return;
+	}
+
 	Particles[0].Position.X = TotalTranslation.X;
 	Particles[0].Position.Y = TotalTranslation.Y;
 
@@ -298,14 +388,9 @@ void UCubismPhysicsComponent::UpdateParticlesForStabilization(
 	}
 }
 
-TObjectPtr<UCubismModelComponent> UCubismPhysicsComponent::GetModel() 
+TObjectPtr<UCubismModelComponent> UCubismPhysicsComponent::GetModel()
 {
-	if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
-	{
-		return ModelComp;
-	}
-
-	return nullptr;
+	return UCubismModelComponent::FindModelComponent(this);
 }
 
 // UObject interface
@@ -330,7 +415,12 @@ void UCubismPhysicsComponent::PostEditChangeProperty(struct FPropertyChangedEven
 
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismPhysicsComponent, Json))
 	{
-		Setup(Model);
+		const TObjectPtr<UCubismModelComponent> ModelComp = IsValid(Model) ? Model : GetModel();
+
+		if (ModelComp)
+		{
+			Setup(ModelComp);
+		}
 	}
 }
 #endif
@@ -349,9 +439,39 @@ void UCubismPhysicsComponent::OnComponentCreated()
 	}
 }
 
+void UCubismPhysicsComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
+{
+	if (IsValid(Model) && Model->Physics == this)
+	{
+		Model->Physics = nullptr;
+	}
+
+	Super::OnComponentDestroyed(bDestroyingHierarchy);
+}
+
 void UCubismPhysicsComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (!IsValid(Model))
+	{
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel() || Rigs.Num() == 0)
+	{
+		return;
+	}
+
+	// A zero time step would never advance the fixed-step loop below.
+	if (DeltaTime <= 0.0f)
+	{
+		return;
+	}
 
 	CurrentRemainTime += DeltaTime;
 	if (CurrentRemainTime > MaxDeltaTime)
@@ -359,31 +479,53 @@ void UCubismPhysicsComponent::TickComponent(float DeltaTime, ELevelTick TickType
 		CurrentRemainTime = 0.0f;
 	}
 
-	const int32 ParameterCount = Model->GetParameterCount();
+	// Includes parameters registered on demand (e.g. by the pose or motion components) after Setup.
+	const int32 ParameterCount = Model->Parameters.Num();
 
 	if (ParameterCaches.Num() < ParameterCount)
 	{
+		const int32 OldCount = ParameterCaches.Num();
+
 		ParameterCaches.SetNum(ParameterCount);
+
+		for (int32 ParameterIndex = OldCount; ParameterIndex < ParameterCount; ++ParameterIndex)
+		{
+			const UCubismParameterComponent* Parameter = Model->GetParameter(ParameterIndex);
+
+			ParameterCaches[ParameterIndex] = Parameter ? Parameter->Value : 0.0f;
+		}
 	}
-	if (ParameterCaches.Num() < ParameterCount)
+	if (ParameterInputCaches.Num() < ParameterCount)
 	{
+		const int32 OldCount = ParameterInputCaches.Num();
+
 		ParameterInputCaches.SetNum(ParameterCount);
-		for (int j = 0; j < ParameterCount; ++j) {
-			ParameterInputCaches[j] = ParameterCaches[j];
+
+		for (int32 ParameterIndex = OldCount; ParameterIndex < ParameterCount; ++ParameterIndex)
+		{
+			ParameterInputCaches[ParameterIndex] = ParameterCaches[ParameterIndex];
 		}
 	}
 
 	const float PhysicsDeltaTime = Fps > 0.0f? 1.0f / Fps : DeltaTime;
 
+	if (PhysicsDeltaTime <= 0.0f)
+	{
+		return;
+	}
+
 	while (CurrentRemainTime >= PhysicsDeltaTime)
 	{
-		const float InputWeight = PhysicsDeltaTime / CurrentRemainTime;
-
-		check(InputWeight >= 0.0f && InputWeight <= 1.0f);
+		const float InputWeight = FMath::Clamp(PhysicsDeltaTime / CurrentRemainTime, 0.0f, 1.0f);
 
 		for (int32 ParameterIndex = 0; ParameterIndex < ParameterCount; ++ParameterIndex)
 		{
 			const UCubismParameterComponent* Parameter = Model->GetParameter(ParameterIndex);
+
+			if (!Parameter)
+			{
+				continue;
+			}
 
 			ParameterCaches[ParameterIndex] = ParameterInputCaches[ParameterIndex] * (1.0f - InputWeight) + Parameter->Value * InputWeight;
 			ParameterInputCaches[ParameterIndex] = ParameterCaches[ParameterIndex];
@@ -392,11 +534,21 @@ void UCubismPhysicsComponent::TickComponent(float DeltaTime, ELevelTick TickType
 		// update each pendulum
 		for (FCubismPhysicsRig& Rig : Rigs)
 		{
+			if (Rig.Particles.Num() == 0)
+			{
+				continue;
+			}
+
 			FVector2D TotalTranslation = FVector2D::ZeroVector;
 			float TotalAngle = 0.0f;
 
 			for (FCubismPhysicsRigInput& Input : Rig.Inputs)
 			{
+				if (!Input.Parameter.IsValid() || !ParameterCaches.IsValidIndex(Input.ParameterIndex))
+				{
+					continue;
+				}
+
 				const float Value = ParameterCaches[Input.ParameterIndex];
 
 				Input.GetNormalizedParameterValue(TotalTranslation, TotalAngle, Value, Rig.NormalizationPosition, Rig.NormalizationAngle);
@@ -404,8 +556,11 @@ void UCubismPhysicsComponent::TickComponent(float DeltaTime, ELevelTick TickType
 
 			const float RadAngle = -TotalAngle * (PI / 180.0f);
 
-			TotalTranslation.X = FMath::Cos(RadAngle) * TotalTranslation.X - FMath::Sin(RadAngle) * TotalTranslation.Y;
-			TotalTranslation.Y = FMath::Sin(RadAngle) * TotalTranslation.X + FMath::Cos(RadAngle) * TotalTranslation.Y;
+			const FVector2D RotatedTranslation(
+				FMath::Cos(RadAngle) * TotalTranslation.X - FMath::Sin(RadAngle) * TotalTranslation.Y,
+				FMath::Sin(RadAngle) * TotalTranslation.X + FMath::Cos(RadAngle) * TotalTranslation.Y
+			);
+			TotalTranslation = RotatedTranslation;
 
 			UpdateParticles(
 				Rig.Particles,
@@ -418,6 +573,16 @@ void UCubismPhysicsComponent::TickComponent(float DeltaTime, ELevelTick TickType
 
 			for (FCubismPhysicsRigOutput& Output : Rig.Outputs)
 			{
+				if (!Output.Parameter.IsValid() || !ParameterCaches.IsValidIndex(Output.ParameterIndex))
+				{
+					continue;
+				}
+
+				if (Output.ParticleIndex < 1 || Output.ParticleIndex >= Rig.Particles.Num())
+				{
+					continue;
+				}
+
 				const float OutputValue = Output.GetValue(Rig.Particles, Gravity);
 
 				Output.PreviousValue = Output.CurrentValue;
@@ -430,15 +595,13 @@ void UCubismPhysicsComponent::TickComponent(float DeltaTime, ELevelTick TickType
 		CurrentRemainTime -= PhysicsDeltaTime;
 	}
 
-	const float Weight = CurrentRemainTime / PhysicsDeltaTime;
-
-	check(Weight >= 0.0f && Weight <= 1.0f);
+	const float Weight = FMath::Clamp(CurrentRemainTime / PhysicsDeltaTime, 0.0f, 1.0f);
 
 	for (FCubismPhysicsRig& Rig : Rigs)
 	{
 		for (FCubismPhysicsRigOutput& Output : Rig.Outputs)
 		{
-			if (Output.ParameterIndex < 0)
+			if (Output.ParameterIndex < 0 || !Output.Parameter.IsValid())
 			{
 				continue;
 			}

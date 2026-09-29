@@ -18,6 +18,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Kismet/GameplayStatics.h"
+#include "CubismLog.h"
 
 UCubismRendererComponent::UCubismRendererComponent()
 {
@@ -26,24 +27,50 @@ UCubismRendererComponent::UCubismRendererComponent()
 	bTickInEditor = true;
 }
 
-void UCubismRendererComponent::BeginPlay() 
+void UCubismRendererComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
 	SpawnMaskTexture();
+
+	if (!IsValid(Model))
+	{
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+	else if (MaskTexture && MaskTexture->MaskTextureComponent)
+	{
+		// Make sure the render targets are assigned to the junctions of this model.
+		MaskTexture->MaskTextureComponent->ResolveMaskLayout();
+	}
 }
 
 void UCubismRendererComponent::Setup(UCubismModelComponent* InModel)
 {
-	check(InModel);
+	if (!InModel)
+	{
+		return;
+	}
+
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
+	{
+		return;
+	}
 
 	Model = InModel;
 
 	NumMasks = 0;
 	Junctions.Empty();
 
-	for (const TObjectPtr<UCubismDrawableComponent>& Drawable : Model->Drawables)
+	for (UCubismDrawableComponent* Drawable : Model->Drawables)
 	{
+		if (!IsValid(Drawable))
+		{
+			continue;
+		}
+
 		TSharedPtr<FCubismMaskJunction> TargetJunction = nullptr;
 
 		for (const TSharedPtr<FCubismMaskJunction>& Junction : Junctions)
@@ -54,7 +81,7 @@ void UCubismRendererComponent::Setup(UCubismModelComponent* InModel)
 				for (int32 i = 0, num = Drawable->Masks.Num(); bAny && i < num; i++)
 				{
 					const int32 MaskDrawableIndex = Drawable->Masks[i];
-					bAny &= Junction->MaskDrawables[i] == Model->Drawables[MaskDrawableIndex];
+					bAny &= Junction->MaskDrawables[i].Get() == Model->GetDrawable(MaskDrawableIndex);
 				}
 
 				if (bAny)
@@ -74,8 +101,12 @@ void UCubismRendererComponent::Setup(UCubismModelComponent* InModel)
 				TargetJunction->MaskDrawables.Reserve(Drawable->Masks.Num());
 				for (const int32 MaskDrawableIndex : Drawable->Masks)
 				{
-					const TObjectPtr<UCubismDrawableComponent>& MaskDrawable = Model->Drawables[MaskDrawableIndex];
-					TargetJunction->MaskDrawables.Add(MaskDrawable);
+					UCubismDrawableComponent* MaskDrawable = Model->GetDrawable(MaskDrawableIndex);
+
+					if (IsValid(MaskDrawable))
+					{
+						TargetJunction->MaskDrawables.Add(TWeakObjectPtr<UCubismDrawableComponent>(MaskDrawable));
+					}
 				}
 
 				NumMasks++;
@@ -84,12 +115,12 @@ void UCubismRendererComponent::Setup(UCubismModelComponent* InModel)
 			Junctions.Add(TargetJunction);
 		}
 
-		TargetJunction->Drawables.AddUnique(Drawable);
+		TargetJunction->Drawables.AddUnique(TWeakObjectPtr<UCubismDrawableComponent>(Drawable));
 	}
 
 	if (Model->Renderer != this)
 	{
-		if (Model->Renderer)
+		if (IsValid(Model->Renderer))
 		{
 			Model->Renderer->DestroyComponent();
 		}
@@ -98,7 +129,7 @@ void UCubismRendererComponent::Setup(UCubismModelComponent* InModel)
 
 	ApplyRenderOrder();
 
-	if (MaskTexture)
+	if (MaskTexture && MaskTexture->MaskTextureComponent)
 	{
 		MaskTexture->MaskTextureComponent->ResolveMaskLayout();
 		AddTickPrerequisiteComponent(MaskTexture->MaskTextureComponent); // must render after mask texture updated
@@ -107,10 +138,27 @@ void UCubismRendererComponent::Setup(UCubismModelComponent* InModel)
 	AddTickPrerequisiteComponent(Model); // must render after model updated
 }
 
+bool UCubismRendererComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
+}
+
 void UCubismRendererComponent::ApplyRenderOrder()
 {
+	if (!HasValidModel())
+	{
+		return;
+	}
+
+	const int32 DrawableCount = Model->GetDrawableCount();
+
 	for (const TObjectPtr<UCubismDrawableComponent>& Drawable : Model->Drawables)
 	{
+		if (!IsValid(Drawable))
+		{
+			continue;
+		}
+
 		int32 NewRenderOrder = Drawable->RenderOrder + Drawable->RenderOrderOffset;
 
 		switch (SortingOrder)
@@ -121,7 +169,7 @@ void UCubismRendererComponent::ApplyRenderOrder()
 			}
 			case ECubismRendererSortingOrder::BackToFront:
 			{
-				NewRenderOrder = Model->GetDrawableCount() - NewRenderOrder - 1;
+				NewRenderOrder = DrawableCount - NewRenderOrder - 1;
 
 				break;
 			}
@@ -147,47 +195,55 @@ void UCubismRendererComponent::ApplyRenderOrder()
 	}
 }
 
-void UCubismRendererComponent::SpawnMaskTexture() 
+void UCubismRendererComponent::SpawnMaskTexture()
 {
 	AActor* Owner = GetOwner();
+	UWorld* World = Owner ? Owner->GetWorld() : GetWorld();
+
+	if (!World)
+	{
+		return;
+	}
 
 	if (MaskTexture == nullptr)
 	{
+		// Preview worlds (e.g. the Blueprint editor viewport) and inactive worlds must not get actors spawned into them.
+		if (World->WorldType != EWorldType::Game && World->WorldType != EWorldType::PIE && World->WorldType != EWorldType::Editor)
+		{
+			return;
+		}
+
 		TArray<AActor*> FoundActors;
-		UGameplayStatics::GetAllActorsOfClass(Owner->GetWorld(), ACubismMaskTexture::StaticClass(), FoundActors);
+		UGameplayStatics::GetAllActorsOfClass(World, ACubismMaskTexture::StaticClass(), FoundActors);
 		if (FoundActors.Num() == 0)
 		{
-			MaskTexture = Owner->GetWorld()->SpawnActor<ACubismMaskTexture>();
+			MaskTexture = World->SpawnActor<ACubismMaskTexture>();
+
+#if WITH_EDITOR
+			if (MaskTexture)
+			{
+				MaskTexture->SetActorLabel(TEXT("CubismMaskTexture"));
+				MaskTexture->SetFlags(RF_Transactional);
+			}
+#endif
 		}
 		else
 		{
-			MaskTexture = (ACubismMaskTexture*)FoundActors[0];
+			MaskTexture = Cast<ACubismMaskTexture>(FoundActors[0]);
 		}
 	}
-	else
+
+	if (MaskTexture && MaskTexture->MaskTextureComponent && Owner)
 	{
-		MaskTexture->MaskTextureComponent->RemoveModel(Owner);
-	}
-	//Should check in case it's spawned in blueprint and the mask texture won't be placed in the blueprint scene
-	if (MaskTexture)
-	{
-#if WITH_EDITOR
-		MaskTexture->SetActorLabel(TEXT("CubismMaskTexture"));
-		MaskTexture->SetFlags(RF_Transactional);
-#endif
+		// AddModel is idempotent, it just marks the layout dirty.
 		MaskTexture->MaskTextureComponent->AddModel(Owner);
 	}
 }
 
 
-TObjectPtr<UCubismModelComponent> UCubismRendererComponent::GetModel() 
+TObjectPtr<UCubismModelComponent> UCubismRendererComponent::GetModel()
 {
-	if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
-	{
-		return ModelComp;
-	}
-
-	return nullptr;
+	return UCubismModelComponent::FindModelComponent(this);
 }
 
 // UObject interface
@@ -212,11 +268,14 @@ void UCubismRendererComponent::PostEditChangeProperty(FPropertyChangedEvent& Pro
 
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismRendererComponent, MaskTexture))
 	{
-		if (MaskTexture)
+		if (MaskTexture && MaskTexture->MaskTextureComponent)
 		{
-			AActor* Owner = GetOwner();
+			if (AActor* Owner = GetOwner())
+			{
+				MaskTexture->MaskTextureComponent->AddModel(Owner);
+			}
 
-			MaskTexture->MaskTextureComponent->AddModel(Owner);
+			AddTickPrerequisiteComponent(MaskTexture->MaskTextureComponent);
 		}
 	}
 
@@ -237,10 +296,7 @@ void UCubismRendererComponent::OnComponentCreated()
 {
 	Super::OnComponentCreated();
 
-	if (GetWorld()->WorldType != EWorldType::EditorPreview)
-	{
-		SpawnMaskTexture();
-	}
+	SpawnMaskTexture();
 
 	const TObjectPtr<UCubismModelComponent> ModelComp = GetModel();
 
@@ -252,20 +308,23 @@ void UCubismRendererComponent::OnComponentCreated()
 
 void UCubismRendererComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
 {
-	if (MaskTexture)
-	{
-		AActor* Owner = GetOwner();
+	// Only unregister the owner from the mask texture if no other renderer took over the model.
+	const bool bIsActiveRenderer = !IsValid(Model) || Model->Renderer == this;
 
-		MaskTexture->MaskTextureComponent->RemoveModel(Owner);
-	}
-	if (Model)
+	if (bIsActiveRenderer && MaskTexture && MaskTexture->MaskTextureComponent)
 	{
-		if (Model->Renderer == this)
+		if (AActor* Owner = GetOwner())
 		{
-			Model->Renderer = nullptr;
+			MaskTexture->MaskTextureComponent->RemoveModel(Owner);
 		}
 	}
 
+	if (IsValid(Model) && Model->Renderer == this)
+	{
+		Model->Renderer = nullptr;
+	}
+
+	Junctions.Empty();
 
 	Super::OnComponentDestroyed(bDestroyingHierarchy);
 }
@@ -274,13 +333,45 @@ void UCubismRendererComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
+	if (!IsValid(Model))
+	{
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel())
+	{
+		return;
+	}
+
+	// The junctions are rebuilt whenever the model regenerates its drawables.
+	if (Junctions.Num() == 0 && Model->Drawables.Num() > 0)
+	{
+		Setup(Model);
+	}
+
 	for (const TSharedPtr<FCubismMaskJunction>& Junction : Junctions)
 	{
-		for (const TObjectPtr<UCubismDrawableComponent>& Drawable : Junction->Drawables)
+		for (const TWeakObjectPtr<UCubismDrawableComponent>& WeakDrawable : Junction->Drawables)
 		{
-			UMaterialInstanceDynamic* MaterialInstance = static_cast<UMaterialInstanceDynamic*>(Drawable->GetMaterial(0));
+			UCubismDrawableComponent* Drawable = WeakDrawable.Get();
 
-			const TObjectPtr<UTexture2D>& MainTexture   = Drawable->TextureIndex < Model->Textures.Num()? Model->Textures[Drawable->TextureIndex] : nullptr;
+			if (!IsValid(Drawable))
+			{
+				continue;
+			}
+
+			UMaterialInstanceDynamic* MaterialInstance = Cast<UMaterialInstanceDynamic>(Drawable->GetMaterial(0));
+
+			if (!MaterialInstance)
+			{
+				continue;
+			}
+
+			const TObjectPtr<UTexture2D>& MainTexture   = Model->Textures.IsValidIndex(Drawable->TextureIndex)? Model->Textures[Drawable->TextureIndex] : nullptr;
 			FLinearColor BaseColor     = Drawable->BaseColor;
 			FLinearColor MultiplyColor = Drawable->MultiplyColor;
 			FLinearColor ScreenColor   = Drawable->ScreenColor;
@@ -303,7 +394,7 @@ void UCubismRendererComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 				{
 					MultiplyColor = ParentPart->MultiplyColor;
 				}
-				
+
 				if (ParentPart->bOverwriteFlagForPartScreenColors)
 				{
 					ScreenColor = ParentPart->ScreenColor;
@@ -319,7 +410,7 @@ void UCubismRendererComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 
 			if (Drawable->IsMasked())
 			{
-				MaterialInstance->SetTextureParameterValue("MaskTexture", Junction->RenderTarget);
+				MaterialInstance->SetTextureParameterValue("MaskTexture", Junction->RenderTarget.Get());
 				MaterialInstance->SetVectorParameterValue("Offset", Junction->Offset);
 				MaterialInstance->SetVectorParameterValue("Channel", Junction->Channel);
 			}

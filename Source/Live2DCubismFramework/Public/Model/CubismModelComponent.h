@@ -57,7 +57,7 @@ enum class ECubismParameterBlendMode : uint8
 
 /**
  * An enumeration for the type of a parameter.
- */	
+ */
 UENUM()
 enum class ECubismParameterType : uint8
 {
@@ -67,6 +67,10 @@ enum class ECubismParameterType : uint8
 
 /**
  * A component to control a Live2D Cubism model.
+ *
+ * The component owns the raw Cubism model and the drawable/parameter/part components generated from it.
+ * It also creates and wires the helper components (parameter store, renderer, motion, expression, physics, pose)
+ * from the json assets assigned to it, so that a model can be set up entirely from the details panel or Blueprint.
  */
 UCLASS(Blueprintable, meta = (BlueprintSpawnableComponent))
 class LIVE2DCUBISMFRAMEWORK_API UCubismModelComponent : public USceneComponent
@@ -82,14 +86,14 @@ public:
 	TObjectPtr<UCubismMoc3> Moc;
 
 	/**
- * The pose asset that contains the pose information.
- */
+	 * The pose asset that contains the pose information.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
 	TObjectPtr<UCubismPose3Json> PoseJson;
 
 	/**
-* The pose asset that contains the motion information.
-*/
+	 * The json assets that contain the motion information.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
 	TArray<TObjectPtr<UCubismMotion3Json>> MotionJsons;
 
@@ -190,14 +194,14 @@ public:
 	TObjectPtr<UCubismUserData3Json> UserDataJson;
 
 	/**
-* The json assets that contain the expression information.
-*/
+	 * The json assets that contain the expression information.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
 	TArray<TObjectPtr<UCubismExp3Json>> ExpressionJsons;
 
 	/**
-* The json assets that contain the physics information.
-*/
+	 * The json asset that contains the physics information.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
 	TObjectPtr<UCubismPhysics3Json> PhysicsJson;
 
@@ -233,11 +237,35 @@ public:
 
 public:
 	/**
-	 * @brief The function to set up the component.
-	 * @note This function should be called after the component is attached to the model component.
+	 * @brief Rebuilds the model from the currently assigned moc.
+	 * All generated drawable/parameter/part components are destroyed and created again,
+	 * and the helper components are set up again. Call this after changing `Moc` at runtime.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void Setup();
+
+	/**
+	 * @brief Makes sure the raw model and its generated components exist.
+	 * This is safe to call at any time and from any component; it does nothing if the model is already built.
+	 * @return True if the raw model is available.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	bool EnsureModelBuilt();
+
+	/**
+	 * @brief Whether the raw model has been created from the moc.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	bool IsModelReady() const { return RawModel != nullptr; }
+
+	/**
+	 * @brief Finds the model component that the given component belongs to.
+	 * Components created by the model component (outer is the model) are resolved directly,
+	 * any other component is resolved through its owner actor.
+	 * @param Component The component to search from.
+	 * @return The model component or nullptr.
+	 */
+	static UCubismModelComponent* FindModelComponent(const UActorComponent* Component);
 
 	////
 
@@ -538,7 +566,7 @@ private:
 	 * @brief The function to get the number of vertex indices of the drawable at the specified index.
 	 * @param DrawableIndex The index of the drawable.
 	 * @return The number of vertex indices of the drawable.
-	 */	
+	 */
 	int32 GetDrawableVertexIndexCount(const int32 DrawableIndex) const;
 
 	/**
@@ -569,7 +597,7 @@ private:
 	 */
 	int32 GetDrawableParentPartIndex(const int32 DrawableIndex) const;
 
-	public:
+public:
 	/**
 	 * The map from the ID of a drawable to its index.
 	 */
@@ -642,15 +670,14 @@ private:
 	 */
 	void AddParameter(const FString ParameterId);
 
-	public:
+public:
 	/**
 	 * The map from the ID of a parameter to its index.
 	 */
 	UPROPERTY()
 	TMap<FString, int32> ParameterIndices;
 
-	private:
-
+private:
 	/**
 	 * The list of the IDs of the parameters that are not in the original model.
 	 */
@@ -694,16 +721,14 @@ private:
 	 */
 	void AddPart(const FString PartId);
 
-	public:
-
+public:
 	/**
 	 * The map from the ID of a part to its index.
 	 */
 	UPROPERTY()
 	TMap<FString, int32> PartIndices;
 
-	private:
-
+private:
 	/**
 	 * The list of the IDs of the parts that are not in the original model.
 	 */
@@ -719,33 +744,85 @@ private:
 private:
 	friend class UCubismMoc3;
 
-	public:
-
+public:
 	/**
 	 * The raw model data.
 	 */
 	csmModel* RawModel;
 
 private:
-	/** Flag to ensure ComponentSetup() logic only runs once. */
-	bool bHasRunComponentSetup = false;
+	/** Reentrancy guard for EnsureModelBuilt(). */
+	bool bIsBuilding = false;
+
+	/**
+	 * The moc the current raw model was created from. Used to detect a `Moc` change made at runtime (e.g. from Blueprint).
+	 */
+	UPROPERTY(Transient, DuplicateTransient)
+	TObjectPtr<UCubismMoc3> BuiltMoc;
+
+	/**
+	 * @brief Frees the raw model memory without touching any component.
+	 */
+	void ReleaseRawModel();
+
+	/**
+	 * @brief Whether it is currently safe to create and register new components (not loading, has a world).
+	 */
+	bool CanCreateComponents() const;
+
+	/**
+	 * @brief Whether the drawable/parameter/part components currently held match the raw model.
+	 */
+	bool ChildComponentsMatchModel() const;
+
+	/**
+	 * @brief Creates the drawable/parameter/part components from the raw model.
+	 */
+	void CreateChildComponents();
+
+	/**
+	 * @brief Calls Setup on the drawable/parameter/part components.
+	 */
+	void SetupChildComponents();
+
+	/**
+	 * @brief Calls Setup on the helper components (renderer, physics, ...) after a rebuild.
+	 */
+	void SetupHelperComponents();
+
+	/**
+	 * @brief Creates a helper component owned by this model if the reference is not valid yet.
+	 */
+	template<class T>
+	T* CreateHelperComponent(TObjectPtr<T>& Reference, const TCHAR* BaseName);
 
 public:
 	// UObject interface
 	virtual void PostLoad() override;
+	virtual void BeginDestroy() override;
 
-#if WITH_EDITORONLY_DATA
-	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	// End of UObject interface
 
 	// UActorComponent interface
 	virtual void BeginPlay() override;
+	virtual void OnRegister() override;
 	virtual void OnComponentCreated() override;
 	virtual void OnComponentDestroyed(bool bDestroyingHierarchy) override;
+	virtual void PostApplyToComponent() override;
 
-	void ComponentCleanup();
+	/**
+	 * @brief Destroys the generated drawable/parameter/part components.
+	 * @param bDestroyHelperComponents Also destroys the helper components owned by this model.
+	 */
+	void ComponentCleanup(const bool bDestroyHelperComponents = false);
 
+	/**
+	 * @brief Creates the helper components (parameter store, renderer, motion, expression, physics, pose)
+	 * that do not exist yet and pushes the assigned json assets to them.
+	 */
 	void ComponentSetup();
 
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;

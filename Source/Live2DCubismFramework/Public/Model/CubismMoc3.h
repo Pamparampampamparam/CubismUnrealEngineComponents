@@ -31,25 +31,33 @@ public:
 	int32 Version;
 
 public:
+	UCubismMoc3();
+
 	/**
-	 * @brief The function to load the moc data into memory and assign it to the model.
-	 * @param Model The model to assign the moc to.
+	 * @brief The function to create a raw model from the moc data and assign it to the model component.
+	 * @param Model The model to assign the raw model to.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void SetupModel(UCubismModelComponent* InModel);
 
 	/**
-	 * @brief The function to delete the moc data assigned to the model and free the memory.
-	 * @param Model The model to delete the moc data from.
+	 * @brief The function to free the raw model assigned to the model component.
+	 * @param Model The model to delete the raw model from.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void DeleteModel(UCubismModelComponent* InModel);
 
 	/**
-	 * @brief The function to set up the moc data.
+	 * @brief The function to revive the moc data in memory. Does nothing if it is already revived.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void Setup();
+
+	/**
+	 * @brief Whether the moc data has been revived and models can be created from it.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	bool IsMocReady() const { return RawMoc != nullptr; }
 
 	////
 

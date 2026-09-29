@@ -18,22 +18,57 @@
 #include "Math/Vector.h"
 
 UCubismDrawableComponent::UCubismDrawableComponent()
+	: Index(-1)
+	, RenderOrder(0)
+	, TextureIndex(0)
+	, Opacity(1.0f)
+	, BaseColor(FLinearColor::White)
+	, bOverwriteFlagForDrawableMultiplyColors(false)
+	, MultiplyColor(FLinearColor::White)
+	, bOverwriteFlagForDrawableScreenColors(false)
+	, ScreenColor(FLinearColor::Black)
+	, bOverwriteFlagForDrawableIsTwoSided(false)
+	, bTwoSided(false)
+	, ParentPartIndex(-1)
+	, BlendMode(ECubismDrawableBlendMode::Normal)
+	, InvertedMask(false)
+	, bBoundsDirty(true)
+	, LocalBounds(ForceInit)
+	, UserMultiplyColor(FLinearColor::White)
+	, UserScreenColor(FLinearColor::Black)
+	, bUserTwoSided(false)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_DuringPhysics;
 	bTickInEditor = true;
-	bBoundsDirty = true;
 }
 
 void UCubismDrawableComponent::Setup(UCubismModelComponent* InModel)
 {
-	check(InModel);
-	check(Index >= 0 && Index < InModel->GetDrawableCount());
+	if (!InModel)
+	{
+		return;
+	}
+
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
+	{
+		return;
+	}
 
 	if (Model == InModel)
 	{
 		return;
 	}
+
+	if (Index < 0 || Index >= InModel->GetDrawableCount())
+	{
+		UE_LOG(LogCubism, Warning, TEXT("UCubismDrawableComponent::Setup: drawable index %d is out of range for model '%s'."), Index, *InModel->GetName());
+
+		return;
+	}
+
+	// A component that already has an ID was loaded or duplicated: keep the values the user edited on it.
+	const bool bFirstSetup = Id.IsEmpty();
 
 	Model = InModel;
 
@@ -52,7 +87,7 @@ void UCubismDrawableComponent::Setup(UCubismModelComponent* InModel)
 		VertexUvs.Empty();
 		VertexUvs.Reserve(VertexCount);
 
-		for (int32 i = 0; i < VertexCount; i++)
+		for (int32 i = 0; DrawableVertexUvs && i < VertexCount; i++)
 		{
 			VertexUvs.Add(FVector2D(DrawableVertexUvs[i].X, DrawableVertexUvs[i].Y));
 		}
@@ -61,7 +96,7 @@ void UCubismDrawableComponent::Setup(UCubismModelComponent* InModel)
 		VertexPositions.Empty();
 		VertexPositions.Reserve(VertexCount);
 
-		for (int32 i = 0; i < VertexCount; i++)
+		for (int32 i = 0; DrawableVertexPositions && i < VertexCount; i++)
 		{
 			VertexPositions.Add(FVector2D(-DrawableVertexPositions[i].X, DrawableVertexPositions[i].Y));
 		}
@@ -70,7 +105,7 @@ void UCubismDrawableComponent::Setup(UCubismModelComponent* InModel)
 		VertexIndices.Empty();
 		VertexIndices.Reserve(VertexIndexCount);
 
-		for (int32 i = 0; i < VertexIndexCount; ++i)
+		for (int32 i = 0; DrawableVertexIndices && i < VertexIndexCount; ++i)
 		{
 			VertexIndices.Add(static_cast<int32>(DrawableVertexIndices[i]));
 		}
@@ -78,24 +113,51 @@ void UCubismDrawableComponent::Setup(UCubismModelComponent* InModel)
 		const int32* DrawableMasks(Model->GetDrawableMask(Index));
 		Masks.Empty();
 		Masks.Reserve(MaskCount);
-		for (int32 MaskIndex = 0; MaskIndex < MaskCount; ++MaskIndex)
+		for (int32 MaskIndex = 0; DrawableMasks && MaskIndex < MaskCount; ++MaskIndex)
 		{
 			Masks.Add(DrawableMasks[MaskIndex]);
 		}
 	}
 
-	Opacity = Model->GetDrawableOpacity(Index);
-	BaseColor = FLinearColor::White;
-	MultiplyColor = Model->GetDrawableMultiplyColor(Index);
-	ScreenColor = Model->GetDrawableScreenColor(Index);
-	bTwoSided = Model->GetDrawableIsTwoSided(Index);
-	UserMultiplyColor = MultiplyColor;
-	UserScreenColor = ScreenColor;
-	bUserTwoSided = bTwoSided;
+	bBoundsDirty = true;
 
-	bOverwriteFlagForDrawableMultiplyColors = false;
-	bOverwriteFlagForDrawableScreenColors = false;
-	bOverwriteFlagForDrawableIsTwoSided = false;
+	if (bFirstSetup)
+	{
+		Opacity = Model->GetDrawableOpacity(Index);
+		BaseColor = FLinearColor::White;
+		MultiplyColor = Model->GetDrawableMultiplyColor(Index);
+		ScreenColor = Model->GetDrawableScreenColor(Index);
+		bTwoSided = Model->GetDrawableIsTwoSided(Index);
+		UserMultiplyColor = MultiplyColor;
+		UserScreenColor = ScreenColor;
+		bUserTwoSided = bTwoSided;
+
+		bOverwriteFlagForDrawableMultiplyColors = false;
+		bOverwriteFlagForDrawableScreenColors = false;
+		bOverwriteFlagForDrawableIsTwoSided = false;
+	}
+	else
+	{
+		// The user caches are not serialized; restore them from the current values.
+		UserMultiplyColor = MultiplyColor;
+		UserScreenColor = ScreenColor;
+		bUserTwoSided = bTwoSided;
+
+		if (!bOverwriteFlagForDrawableMultiplyColors)
+		{
+			MultiplyColor = Model->GetDrawableMultiplyColor(Index);
+		}
+
+		if (!bOverwriteFlagForDrawableScreenColors)
+		{
+			ScreenColor = Model->GetDrawableScreenColor(Index);
+		}
+
+		if (!bOverwriteFlagForDrawableIsTwoSided)
+		{
+			bTwoSided = Model->GetDrawableIsTwoSided(Index);
+		}
+	}
 
 	ParentPartIndex = Model->GetDrawableParentPartIndex(Index);
 	BlendMode = Model->GetDrawableBlendMode(Index);
@@ -128,29 +190,29 @@ void UCubismDrawableComponent::Setup(UCubismModelComponent* InModel)
 	}
 
 	UMaterial* Material = Cast<UMaterial>(StaticLoadObject(UMaterial::StaticClass(), nullptr, *(TEXT("/Live2DCubismSDK/Materials") / MaterialName)));
-	UMaterialInstanceDynamic* MaterialInstance = UMaterialInstanceDynamic::Create(Material, this, *MaterialName);
 
-	SetMaterial(0, static_cast<UMaterialInterface*>(MaterialInstance));
-
-	if (!Model->UserDataJson)
+	if (Material)
 	{
-		UserDataTag = TEXT("");
+		UMaterialInstanceDynamic* MaterialInstance = UMaterialInstanceDynamic::Create(Material, this);
+
+		SetMaterial(0, static_cast<UMaterialInterface*>(MaterialInstance));
 	}
 	else
 	{
-		const FCubismUserDataEntry& UserDataEntry = Model->UserDataJson->Data[ECubismUserDataTargetType::ArtMesh];
+		UE_LOG(LogCubism, Error, TEXT("UCubismDrawableComponent::Setup: material '%s' was not found in the plugin content."), *MaterialName);
+	}
 
-		if (UserDataEntry.Tags.Contains(Id))
-		{
-			UserDataTag = UserDataEntry.Tags[Id];
-		}
-		else
-		{
-			UserDataTag = TEXT("");
-		}
+	const FCubismUserDataEntry* UserDataEntry = Model->UserDataJson ? Model->UserDataJson->Data.Find(ECubismUserDataTargetType::ArtMesh) : nullptr;
+	const FString* Tag = UserDataEntry ? UserDataEntry->Tags.Find(Id) : nullptr;
+
+	if (bFirstSetup || Tag)
+	{
+		UserDataTag = Tag ? *Tag : TEXT("");
 	}
 
 	AddTickPrerequisiteComponent(Model); // must be updated after model updated
+
+	MarkRenderStateDirty();
 }
 
 TArray<int32> UCubismDrawableComponent::GetVertexIndices() const
@@ -165,7 +227,7 @@ TArray<FVector2D> UCubismDrawableComponent::GetVertexPositions() const
 
 FVector UCubismDrawableComponent::ToGlobalPosition(const FVector2D VertexPosition) const
 {
-	const float Scale = 0.01f * Model->GetPixelsPerUnit();
+	const float Scale = IsValid(Model) ? 0.01f * Model->GetPixelsPerUnit() : 1.0f;
 
 	// align the model on the y-z plane
 	return FVector(0.0f, Scale * VertexPosition.X, Scale * VertexPosition.Y);
@@ -179,22 +241,22 @@ TArray<FVector2D> UCubismDrawableComponent::GetVertexUvs() const
 
 const TArray<int32> UCubismDrawableComponent::GetDrawableMask() const
 {
-	return TArray<int32>(Model->GetDrawableMask(Index), Model->GetDrawableMaskCount(Index));
+	return Masks;
 }
 
 int32 UCubismDrawableComponent::GetDrawableMaskCount() const
 {
-	return Model->GetDrawableMaskCount(Index);
+	return Masks.Num();
 }
 
-TObjectPtr<UCubismModelComponent> UCubismDrawableComponent::GetModel() 
+bool UCubismDrawableComponent::HasValidModel() const
 {
-	if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
-	{
-		return ModelComp;
-	}
+	return IsValid(Model) && Model->IsModelReady() && Index >= 0 && Index < Model->GetDrawableCount();
+}
 
-	return nullptr;
+TObjectPtr<UCubismModelComponent> UCubismDrawableComponent::GetModel()
+{
+	return UCubismModelComponent::FindModelComponent(this);
 }
 
 // UObject interface
@@ -217,6 +279,8 @@ void UCubismDrawableComponent::PostEditChangeProperty(FPropertyChangedEvent& Pro
 
 	const FName PropertyName = PropertyChangedEvent.GetPropertyName();
 
+	const bool bModelReady = HasValidModel();
+
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismDrawableComponent, bOverwriteFlagForDrawableMultiplyColors))
 	{
 		// If the flag is changed from false to true, the stored color is applied.
@@ -225,7 +289,7 @@ void UCubismDrawableComponent::PostEditChangeProperty(FPropertyChangedEvent& Pro
 			MultiplyColor = UserMultiplyColor;
 		}
 		// If the flag is changed from true to false, the color from the model is applied.
-		else
+		else if (bModelReady)
 		{
 			MultiplyColor = Model->GetDrawableMultiplyColor(Index);
 		}
@@ -244,7 +308,7 @@ void UCubismDrawableComponent::PostEditChangeProperty(FPropertyChangedEvent& Pro
 			ScreenColor = UserScreenColor;
 		}
 		// If the flag is changed from true to false, the color from the model is applied.
-		else
+		else if (bModelReady)
 		{
 			ScreenColor = Model->GetDrawableScreenColor(Index);
 		}
@@ -263,15 +327,19 @@ void UCubismDrawableComponent::PostEditChangeProperty(FPropertyChangedEvent& Pro
 			bTwoSided = bUserTwoSided;
 		}
 		// If the flag is changed from true to false, the value from the model is applied.
-		else
+		else if (bModelReady)
 		{
 			bTwoSided = Model->GetDrawableIsTwoSided(Index);
 		}
+
+		MarkRenderDynamicDataDirty();
 	}
 
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismDrawableComponent, bTwoSided))
 	{
 		bUserTwoSided = bTwoSided;
+
+		MarkRenderDynamicDataDirty();
 	}
 }
 #endif
@@ -300,12 +368,12 @@ void UCubismDrawableComponent::SendRenderDynamicData_Concurrent()
 
 		NewDynamicData.Index = Index;
 
-		for (const FVector2D& LocalPosition : GetVertexPositions())
+		for (const FVector2D& LocalPosition : VertexPositions)
 		{
 			NewDynamicData.Positions.Add(FVector3f(ToGlobalPosition(LocalPosition)));
 		}
 
-		for (const FVector2D& UV : GetVertexUvs())
+		for (const FVector2D& UV : VertexUvs)
 		{
 			NewDynamicData.UVs.Add(FVector2f(UV));
 		}
@@ -326,6 +394,20 @@ void UCubismDrawableComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
+	if (!IsValid(Model))
+	{
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel())
+	{
+		return;
+	}
+
 	if (Model->GetDrawableDynamicFlagOpacityDidChange(Index))
 	{
 		Opacity = Model->GetDrawableOpacity(Index);
@@ -339,13 +421,14 @@ void UCubismDrawableComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 		const int32 VertexCount(Model->GetDrawableVertexCount(Index));
 		VertexPositions.Reserve(VertexCount);
 
-		for (int32 i = 0; i < VertexCount; i++)
-		{	
+		for (int32 i = 0; DrawableVertexPositions && i < VertexCount; i++)
+		{
 			VertexPositions.Add(FVector2D(-DrawableVertexPositions[i].X, DrawableVertexPositions[i].Y));
 		}
 
 		bBoundsDirty = true;
 		MarkRenderDynamicDataDirty();
+		MarkRenderTransformDirty(); // pushes the recalculated bounds to the render thread
 	}
 
 	if (Model->GetDrawableDynamicFlagBlendColorDidChange(Index))
@@ -366,15 +449,20 @@ void UCubismDrawableComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 //~ Begin USceneComponent Interface
 FBoxSphereBounds UCubismDrawableComponent::CalcBounds(const FTransform& LocalToWorld) const
 {
-	if (Model)
+	if (IsValid(Model))
 	{
 		if (bBoundsDirty)
 		{
 			FBox Box(ForceInit);
 
-			for (const FVector2D& LocalPosition : GetVertexPositions())
+			for (const FVector2D& LocalPosition : VertexPositions)
 			{
 				Box += ToGlobalPosition(LocalPosition);
+			}
+
+			if (!Box.IsValid)
+			{
+				Box = FBox(FVector::ZeroVector, FVector::ZeroVector);
 			}
 
 			LocalBounds = FBoxSphereBounds(Box);
@@ -389,16 +477,21 @@ FBoxSphereBounds UCubismDrawableComponent::CalcBounds(const FTransform& LocalToW
 //~ Begin UPrimitiveComponent Interface
 FPrimitiveSceneProxy* UCubismDrawableComponent::CreateSceneProxy()
 {
+	if (!GetMaterial(0) || VertexPositions.Num() == 0 || VertexIndices.Num() == 0)
+	{
+		return nullptr;
+	}
+
 	FCubismDrawableDynamicMeshData DynamicData;
 
 	DynamicData.Index = Index;
 
-	for (const FVector2D& LocalPosition : GetVertexPositions())
+	for (const FVector2D& LocalPosition : VertexPositions)
 	{
 		DynamicData.Positions.Add(FVector3f(ToGlobalPosition(LocalPosition)));
 	}
 
-	for (const FVector2D& UV : GetVertexUvs())
+	for (const FVector2D& UV : VertexUvs)
 	{
 		DynamicData.UVs.Add(FVector2f(UV));
 	}

@@ -48,9 +48,7 @@ float NormalizeParameterValue(
 	const float NormalizedMinimum, const float NormalizedMaximum, const float NormalizedDefault, const bool bIsInverted
 )
 {
-	check(ParameterMinimum <= ParameterMaximum);
-	check(NormalizedMinimum <= NormalizedMaximum);
-
+	// The ranges are ordered with Min/Max below, so a swapped pair in the json is tolerated instead of asserting.
 	const float MaxValue = FMath::Max(ParameterMaximum, ParameterMinimum);
 	if (MaxValue < Value)
 	{
@@ -114,6 +112,11 @@ void FCubismPhysicsRigInput::GetNormalizedParameterValue(
 	const FCubismPhysicsNormalization& NormalizationAngle
 )
 {
+	if (!Parameter.IsValid())
+	{
+		return;
+	}
+
 	switch (Type)
 	{
 		case ECubismPhysicsSource::X:
@@ -171,7 +174,10 @@ void FCubismPhysicsRigInput::GetNormalizedParameterValue(
 
 void FCubismPhysicsRigOutput::UpdateOutputParameterValue(float& ParameterValue, float Value)
 {
-	check(Parameter);
+	if (!Parameter.IsValid())
+	{
+		return;
+	}
 
 	switch (Type)
 	{
@@ -229,12 +235,17 @@ void FCubismPhysicsRigOutput::UpdateOutputParameterValue(float& ParameterValue, 
 		ParameterValue = Value;
 	}
 
-	check(Parameter->MinimumValue <= ParameterValue && ParameterValue <= Parameter->MaximumValue);
+	ParameterValue = FMath::Clamp(ParameterValue, Parameter->MinimumValue, Parameter->MaximumValue);
 }
 
 float FCubismPhysicsRigOutput::GetValue(const TArray<struct FCubismPhysicsRigParticle> Particles, const FVector2D ParentGravity) const
 {
 	float Value = 0.0f;
+
+	if (ParticleIndex < 1 || ParticleIndex >= Particles.Num())
+	{
+		return Value;
+	}
 
 	const FVector2D Translation = Particles[ParticleIndex].Position - Particles[ParticleIndex - 1].Position;
 

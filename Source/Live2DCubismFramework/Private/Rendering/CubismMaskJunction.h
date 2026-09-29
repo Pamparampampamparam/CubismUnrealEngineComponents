@@ -21,26 +21,27 @@ class FCubismMaskJunction
 public:
 	/**
 	 * The list of the drawables that use the same mask.
+	 * Weak because the junction lives outside the garbage collector and the drawables can be destroyed at any time.
 	 */
-	TArray<TObjectPtr<UCubismDrawableComponent>> Drawables;
+	TArray<TWeakObjectPtr<UCubismDrawableComponent>> Drawables;
 
 	/**
 	 * The list of the drawables for masking.
 	 */
-	TArray<TObjectPtr<UCubismDrawableComponent>> MaskDrawables;
+	TArray<TWeakObjectPtr<UCubismDrawableComponent>> MaskDrawables;
 
 	/**
 	 * The render target where the mask is drawn.
 	 */
-	UTextureRenderTarget2D* RenderTarget;
+	TWeakObjectPtr<UTextureRenderTarget2D> RenderTarget;
 
 	/**
 	 * The offset of the mask to be drawn.
 	 */
-	FVector4 Offset;
+	FVector4 Offset = FVector4(0.0f, 0.0f, 0.0f, 0.0f);
 
 	/**
 	 * The channel of the mask to be drawn.
 	 */
-	FVector4 Channel;
+	FVector4 Channel = FVector4(0.0f, 0.0f, 0.0f, 0.0f);
 };

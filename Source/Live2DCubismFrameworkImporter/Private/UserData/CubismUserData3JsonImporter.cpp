@@ -66,7 +66,10 @@ bool FCubismUserData3JsonImporter::ImportFromString(const FString& FileContent)
 		}
 		else
 		{
-			check(false);
+			// Unknown targets are skipped instead of crashing the import.
+			UE_LOG(LogCubism, Warning, TEXT("Unsupported user data target '%s' was skipped."), *TargetValue);
+
+			continue;
 		}
 
 		if (!Data.Contains(Target))

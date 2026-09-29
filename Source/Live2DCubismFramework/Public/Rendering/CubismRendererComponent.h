@@ -90,30 +90,40 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void ApplyRenderOrder();
 
+	/**
+	 * @brief Whether the component is bound to a model that is ready to be queried.
+	 */
+	bool HasValidModel() const;
+
 private:
 	/**
 	 * @brief The constructor of the component.
 	 */
 	UCubismRendererComponent();
 
+	/**
+	 * @brief Finds or spawns the mask texture actor of the world and registers the owner with it.
+	 */
 	void SpawnMaskTexture();
 
 	TObjectPtr<UCubismModelComponent> GetModel();
 
 	/**
 	 * The model component that the component depends on.
+	 * Tracked by the garbage collector so that it is cleared when the model is destroyed.
 	 */
+	UPROPERTY(Transient, DuplicateTransient)
 	TObjectPtr<UCubismModelComponent> Model;
 
-public:	
+public:
 
 	virtual void BeginPlay() override;
 
 	// UObject interface
 	virtual void PostLoad() override;
 
-#if WITH_EDITORONLY_DATA
-	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#if WITH_EDITOR
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 	// End of UObject interface
 

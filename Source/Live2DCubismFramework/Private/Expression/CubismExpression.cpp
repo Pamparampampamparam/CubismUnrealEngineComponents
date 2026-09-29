@@ -9,11 +9,20 @@
 #include "Expression/CubismExpression.h"
 
 FCubismExpression::FCubismExpression(const UCubismExp3Json* Json)
+	: FadeInTime(0.0f)
+	, FadeOutTime(0.0f)
+	, Weight(1.0f)
+	, StartTime(0.0f)
+	, EndTime(INFINITY)
 {
-	Weight = 1.0f;
+	if (!Json)
+	{
+		return;
+	}
+
 	FadeInTime = Json->FadeInTime;
 	FadeOutTime = Json->FadeOutTime;
-	Parameters = Json->Parameters;	
+	Parameters = Json->Parameters;
 }
 
 void FCubismExpression::Init(const float Time)
@@ -33,12 +42,10 @@ float FCubismExpression::CalcExpressionWeight(const float Time) const
 		CalcWeight = EasingSin((Time - StartTime) / FadeInTime);
 	}
 
-	check(CalcWeight >= 0.0f && CalcWeight <= 1.0f);
-
-	return CalcWeight;
+	return FMath::Clamp(CalcWeight, 0.0f, 1.0f);
 }
 
-float FCubismExpression::UpdateWeight(const float ElapsedTime)
+float FCubismExpression::UpdateWeight(const float Time)
 {
 	float FadeInWeight = 1.0f;
 	float FadeOutWeight = 1.0f;
@@ -46,27 +53,42 @@ float FCubismExpression::UpdateWeight(const float ElapsedTime)
 
 	if (FadeInTime > 0.0f)
 	{
-		FadeInWeight = EasingSin(ElapsedTime / FadeInTime);
+		FadeInWeight = EasingSin((Time - StartTime) / FadeInTime);
 	}
 
-	if (FadeOutTime > 0.0f)
+	if (FadeOutTime > 0.0f && IsFadingOut())
 	{
-		FadeOutWeight = EasingSin((EndTime - ElapsedTime) / FadeOutTime);
+		FadeOutWeight = EasingSin((EndTime - Time) / FadeOutTime);
 	}
 
-	NewFadeWeight = NewFadeWeight * FadeInWeight * FadeOutWeight;
+	NewFadeWeight = FMath::Clamp(NewFadeWeight * FadeInWeight * FadeOutWeight, 0.0f, 1.0f);
 
-	check(NewFadeWeight >= 0.0f && NewFadeWeight <= 1.0f);
+	FadeWeight = NewFadeWeight;
 
 	return NewFadeWeight;
 }
 
 void FCubismExpression::StartFadeout(const float Time)
 {
-	const float NewEndTime = FadeOutTime + Time;
+	const float NewEndTime = FMath::Max(FadeOutTime, 0.0f) + Time;
 
-	if (EndTime < 0.0f || NewEndTime < EndTime)
+	if (!IsFadingOut() || NewEndTime < EndTime)
 	{
 		EndTime = NewEndTime;
 	}
+}
+
+bool FCubismExpression::IsFadingOut() const
+{
+	return FMath::IsFinite(EndTime);
+}
+
+bool FCubismExpression::IsFinished(const float Time) const
+{
+	if (State == ECubismExpressionState::End)
+	{
+		return true;
+	}
+
+	return IsFadingOut() && Time >= EndTime;
 }

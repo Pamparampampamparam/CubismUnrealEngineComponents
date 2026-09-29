@@ -10,6 +10,7 @@
 
 #include "Motion/CubismMotion3Json.h"
 #include "Motion/CubismMotion.h"
+#include "Model/CubismModelComponent.h"
 #include "Model/CubismParameterComponent.h"
 #include "Model/CubismParameterStoreComponent.h"
 #include "Model/CubismPartComponent.h"
@@ -17,6 +18,8 @@
 #include "CubismLog.h"
 
 UCubismMotionComponent::UCubismMotionComponent()
+	: Time(0.0f)
+	, bWasPlaying(false)
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
@@ -25,33 +28,48 @@ UCubismMotionComponent::UCubismMotionComponent()
 
 void UCubismMotionComponent::Setup(UCubismModelComponent* InModel)
 {
-	check(InModel);
-
-	if (Model != InModel)
+	if (!InModel)
 	{
-		Model = InModel;
+		return;
 	}
+
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
+	{
+		return;
+	}
+
+	Model = InModel;
 
 	Time = 0.0f;
 	MotionQueue.Empty();
+	CurrentPriority = ECubismMotionPriority::None;
+	bWasPlaying = false;
 
 	if (Model->Motion != this)
 	{
-		if (Model->Motion)
+		if (IsValid(Model->Motion))
 		{
 			Model->Motion->DestroyComponent();
 		}
 		Model->Motion = this;
 	}
 
-	AddTickPrerequisiteComponent(Model->ParameterStore); // must be updated after parameters loaded
+	if (IsValid(Model->ParameterStore))
+	{
+		AddTickPrerequisiteComponent(Model->ParameterStore); // must be updated after parameters loaded
+	}
+}
+
+bool UCubismMotionComponent::HasValidModel() const
+{
+	return IsValid(Model) && Model->IsModelReady();
 }
 
 bool UCubismMotionComponent::IsFinished() const
 {
 	for (const TSharedPtr<FCubismMotion>& Motion : MotionQueue)
 	{
-		if (Motion->State != ECubismMotionState::End)
+		if (Motion.IsValid() && Motion->State != ECubismMotionState::End)
 		{
 			return false;
 		}
@@ -76,12 +94,19 @@ void UCubismMotionComponent::PlayMotion(const int32 InIndex, const float OffsetT
 {
 	if (!Jsons.IsValidIndex(InIndex))
 	{
-		UE_LOG(LogCubism, Warning, TEXT("Motion cannot be played. Index is out of range."));
+		UE_LOG(LogCubism, Warning, TEXT("Motion cannot be played. Index %d is out of range."), InIndex);
 
 		return;
 	}
 
 	const TObjectPtr<UCubismMotion3Json>& Json = Jsons[InIndex];
+
+	if (!Json)
+	{
+		UE_LOG(LogCubism, Warning, TEXT("Motion cannot be played. The motion asset at index %d is not set."), InIndex);
+
+		return;
+	}
 
 	if (Priority == ReservedPriority || Priority == ECubismMotionPriority::Force)
 	{
@@ -92,7 +117,10 @@ void UCubismMotionComponent::PlayMotion(const int32 InIndex, const float OffsetT
 
 	for (const TSharedPtr<FCubismMotion>& Motion : MotionQueue)
 	{
-		Motion->SetFadeout(Motion->FadeOutTime);
+		if (Motion.IsValid())
+		{
+			Motion->SetFadeout(Motion->FadeOutTime);
+		}
 	}
 
 	TSharedPtr<FCubismMotion> NextMotion = MakeShared<FCubismMotion>(Json, OffsetTime);
@@ -100,29 +128,33 @@ void UCubismMotionComponent::PlayMotion(const int32 InIndex, const float OffsetT
 	MotionQueue.Add(NextMotion);
 }
 
+bool UCubismMotionComponent::IsPlaying() const
+{
+	return MotionQueue.Num() > 0;
+}
+
 void UCubismMotionComponent::StopAllMotions(const bool bForce)
 {
 	if (bForce)
 	{
 		MotionQueue.Empty();
+		CurrentPriority = ECubismMotionPriority::None;
 	}
 	else
 	{
 		for (const TSharedPtr<FCubismMotion>& Motion : MotionQueue)
 		{
-			Motion->FadeOut(Time);
+			if (Motion.IsValid())
+			{
+				Motion->FadeOut(Time);
+			}
 		}
 	}
 }
 
-TObjectPtr<UCubismModelComponent> UCubismMotionComponent::GetModel() 
+TObjectPtr<UCubismModelComponent> UCubismMotionComponent::GetModel()
 {
-	if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
-	{
-		return ModelComp;
-	}
-
-	return nullptr;
+	return UCubismModelComponent::FindModelComponent(this);
 }
 
 // UObject interface
@@ -147,7 +179,14 @@ void UCubismMotionComponent::PostEditChangeProperty(struct FPropertyChangedEvent
 
 	if (PropertyName == GET_MEMBER_NAME_CHECKED(UCubismMotionComponent, Index))
 	{
-		PlayMotion(Index, 0.0f, ECubismMotionPriority::Force);
+		if (Jsons.IsValidIndex(Index))
+		{
+			PlayMotion(Index, 0.0f, ECubismMotionPriority::Force);
+		}
+		else
+		{
+			StopAllMotions();
+		}
 	}
 }
 #endif
@@ -166,12 +205,38 @@ void UCubismMotionComponent::OnComponentCreated()
 	}
 }
 
+void UCubismMotionComponent::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (!IsValid(Model))
+	{
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	// Motions played in the editor are not carried into the game, start the configured one.
+	if (bAutoPlay && MotionQueue.Num() == 0 && Jsons.Num() > 0)
+	{
+		const int32 PlayIndex = Jsons.IsValidIndex(Index) ? Index : 0;
+
+		if (Jsons[PlayIndex])
+		{
+			PlayMotion(PlayIndex, 0.0f, ECubismMotionPriority::Idle);
+		}
+	}
+}
+
 void UCubismMotionComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
 {
-	if (Model->Motion == this)
+	if (IsValid(Model) && Model->Motion == this)
 	{
 		Model->Motion = nullptr;
 	}
+
+	MotionQueue.Empty();
 
 	Super::OnComponentDestroyed(bDestroyingHierarchy);
 }
@@ -180,11 +245,31 @@ void UCubismMotionComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
+	if (!IsValid(Model))
+	{
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel())
+	{
+		return;
+	}
+
 	Time += Speed * DeltaTime;
 
 	for (int32 i = 0; i < MotionQueue.Num();)
 	{
-		TSharedPtr<FCubismMotion>& Motion = MotionQueue[i];
+		TSharedPtr<FCubismMotion> Motion = MotionQueue[i];
+
+		if (!Motion.IsValid())
+		{
+			MotionQueue.RemoveAt(i);
+			continue;
+		}
 
 		if (Motion->State == ECubismMotionState::None)
 		{
@@ -192,7 +277,7 @@ void UCubismMotionComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 			Motion->Init(Time);
 		}
 
-		float FadeWeight = Motion->UpdateFadeWeight(Motion, Time);
+		const float FadeWeight = Motion->UpdateFadeWeight(Motion, Time);
 
 		UpdateMotion(Time, FadeWeight, Motion);
 
@@ -211,12 +296,20 @@ void UCubismMotionComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 		}
 	}
 
-	if (IsFinished())
+	const bool bIsPlaying = MotionQueue.Num() > 0;
+
+	if (!bIsPlaying)
 	{
 		CurrentPriority = ECubismMotionPriority::None;
+	}
 
+	// Only notify on the transition from playing to finished, not every idle frame.
+	if (bWasPlaying && !bIsPlaying)
+	{
 		OnMotionPlaybackFinished.Broadcast();
 	}
+
+	bWasPlaying = bIsPlaying;
 }
 // End of UActorComponent interface
 
@@ -229,18 +322,21 @@ void UCubismMotionComponent::UpdateMotion(float UserTimeSeconds, float FadeWeigh
 		TimeOffsetSeconds = 0.0f;
 	}
 
+	// The end time is absolute (in component time) and negative while no fade-out has been requested.
+	const float MotionEndTime = CubismMotion->GetEndTime();
+
 	const float TmpFadeIn = (CubismMotion->FadeInTime <= 0.0f)
 		? 1.0f
-		: FCubismMotion::EasingSin((UserTimeSeconds - CubismMotion->EndTime) / CubismMotion->FadeInTime);
+		: FCubismMotion::EasingSin((UserTimeSeconds - CubismMotion->StartTime) / CubismMotion->FadeInTime);
 
-	const float TmpFadeOut = (CubismMotion->FadeOutTime <= 0.0f || CubismMotion->EndTime < 0.0f)
+	const float TmpFadeOut = (CubismMotion->FadeOutTime <= 0.0f || MotionEndTime < 0.0f)
 		? 1.0f
-		: FCubismMotion::EasingSin((CubismMotion->EndTime - UserTimeSeconds) / CubismMotion->FadeOutTime);
+		: FCubismMotion::EasingSin((MotionEndTime - UserTimeSeconds) / CubismMotion->FadeOutTime);
 
 	// 'Repeat' time as necessary.
 	float MotionTime = TimeOffsetSeconds;
 
-	if (CubismMotion->State == ECubismMotionState::PlayInLoop)
+	if (CubismMotion->State == ECubismMotionState::PlayInLoop && CubismMotion->Duration > 0.0f)
 	{
 		while (MotionTime > CubismMotion->Duration)
 		{
@@ -248,7 +344,7 @@ void UCubismMotionComponent::UpdateMotion(float UserTimeSeconds, float FadeWeigh
 		}
 	}
 
-	TArray<FCubismMotionCurve> Curves = CubismMotion->Curves;
+	const TArray<FCubismMotionCurve>& Curves = CubismMotion->Curves;
 
 	// Evaluate model curves.
 	for (const FCubismMotionCurve& Curve : Curves)
@@ -259,9 +355,9 @@ void UCubismMotionComponent::UpdateMotion(float UserTimeSeconds, float FadeWeigh
 		}
 
 		// Evaluate curve and call handler.
-		float Value = CubismMotion->GetValue(Curve.Id, MotionTime);
+		const float Value = CubismMotion->GetValue(Curve.Id, MotionTime);
 
-		if (Curve.Id == "PartOpacity")
+		if (Curve.Id == "Opacity")
 		{
 			Model->Opacity = Value;
 		}
@@ -286,8 +382,7 @@ void UCubismMotionComponent::UpdateMotion(float UserTimeSeconds, float FadeWeigh
 		const float SourceValue = Parameter->Value;
 
 		// Evaluate curve and apply value.
-		float Value = CubismMotion->GetValue(Curve.Id, MotionTime);
-
+		const float Value = CubismMotion->GetValue(Curve.Id, MotionTime);
 
 		float NewValue;
 		// Fade per parameter.
@@ -319,9 +414,9 @@ void UCubismMotionComponent::UpdateMotion(float UserTimeSeconds, float FadeWeigh
 			}
 			else
 			{
-				FadeOutWeight = (Curve.FadeOutTime == 0.0f || CubismMotion->EndTime < 0.0f)
+				FadeOutWeight = (Curve.FadeOutTime == 0.0f || MotionEndTime < 0.0f)
 					? 1.0f
-					: FCubismMotion::EasingSin((UserTimeSeconds - CubismMotion->EndTime) / Curve.FadeOutTime);
+					: FCubismMotion::EasingSin((MotionEndTime - UserTimeSeconds) / Curve.FadeOutTime);
 			}
 
 			const float ParamWeight = CubismMotion->GetWeight() * FadeInWeight * FadeOutWeight;
@@ -340,7 +435,7 @@ void UCubismMotionComponent::UpdateMotion(float UserTimeSeconds, float FadeWeigh
 			continue;
 		}
 
-		// Find parameter.
+		// Part opacities are driven through parameters of the same ID (mirrors the native framework and the pose component).
 		UCubismParameterComponent* Parameter = Model->GetParameter(Curve.Id);
 
 		// Skip curve evaluation if no value in sink.
@@ -350,17 +445,17 @@ void UCubismMotionComponent::UpdateMotion(float UserTimeSeconds, float FadeWeigh
 		}
 
 		// Evaluate curve and apply value.
-		float Value = CubismMotion->GetValue(Curve.Id, MotionTime);
+		const float Value = CubismMotion->GetValue(Curve.Id, MotionTime);
 
 		Parameter->SetParameterValue(Value);
 	}
 
-	if ((CubismMotion->GetEndTime() > 0.0f) && (CubismMotion->GetEndTime() < UserTimeSeconds))
+	if ((MotionEndTime >= 0.0f) && (MotionEndTime < UserTimeSeconds))
 	{
 		CubismMotion->IsFinished(true);
 	}
 
-	if (Time - CubismMotion->StartTime > CubismMotion->Duration)
+	if (UserTimeSeconds - CubismMotion->StartTime > CubismMotion->Duration)
 	{
 		if (CubismMotion->State == ECubismMotionState::PlayInLoop)
 		{

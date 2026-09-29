@@ -9,12 +9,26 @@
 #include "Motion/CubismMotion.h"
 
 FCubismMotion::FCubismMotion(const UCubismMotion3Json* Json, const float InOffsetTime)
-	: Weight(1.0f)
+	: Duration(0.0f)
+	, bLoop(false)
+	, Fps(30.0f)
+	, FadeInTime(0.0f)
+	, FadeOutTime(0.0f)
+	, CurveTable(nullptr)
+	, StartTime(0.0f)
+	, OffsetTime(InOffsetTime)
+	, EndTime(-1.0f)
+	, Weight(1.0f)
 	, FadeOutSeconds(0.0f)
 	, EndTimeSeconds(-1.0f)
 	, bIsTriggeredFadeOut(false)
 	, bFinished(false)
 {
+	if (!Json)
+	{
+		return;
+	}
+
 	Duration = Json->Duration;
 	bLoop = Json->bLoop;
 	Fps = Json->Fps;
@@ -23,8 +37,6 @@ FCubismMotion::FCubismMotion(const UCubismMotion3Json* Json, const float InOffse
 	Curves = Json->Curves;
 	CurveTable = Json->CurveTable;
 	Events = Json->Events;
-
-	OffsetTime = InOffsetTime;
 }
 
 void FCubismMotion::Init(const float Time)
@@ -37,19 +49,22 @@ void FCubismMotion::Init(const float Time)
 
 float FCubismMotion::UpdateFadeWeight(const TSharedPtr<FCubismMotion>& CubismMotion, float UserTimeSeconds)
 {
+	if (!CubismMotion.IsValid())
+	{
+		return 0.0f;
+	}
+
 	float FadeWeight = Weight;
 
-	const float FadeIn = CubismMotion->FadeInTime == 0.0f
+	const float FadeIn = CubismMotion->FadeInTime <= 0.0f
 		? 1.0f
 		: EasingSin((UserTimeSeconds - CubismMotion->StartTime) / CubismMotion->FadeInTime);
 
-	const float FadeOut = (CubismMotion->FadeOutTime == 0.0f || CubismMotion->GetEndTime() < 0.0f)
+	const float FadeOut = (CubismMotion->FadeOutTime <= 0.0f || CubismMotion->GetEndTime() < 0.0f)
 		? 1.0f
 		: EasingSin((CubismMotion->GetEndTime() - UserTimeSeconds) / CubismMotion->FadeOutTime);
 
-	FadeWeight = FadeWeight * FadeIn * FadeOut;
-
-	check(0.0f <= FadeWeight && FadeWeight <= 1.0f);
+	FadeWeight = FMath::Clamp(FadeWeight * FadeIn * FadeOut, 0.0f, 1.0f);
 
 	return FadeWeight;
 }
@@ -71,19 +86,15 @@ void FCubismMotion::SetFadeout(float NewFadeOutSeconds)
 
 void FCubismMotion::FadeOut(const float Time)
 {
+	// Fading out ends the loop; the motion finishes once the fade-out completes.
 	State = ECubismMotionState::Play;
 
-	const float NewEndTime = FadeOutTime + Time;
-
-	if (NewEndTime < EndTime)
-	{
-		EndTime = NewEndTime;
-	}
+	StartFadeout(FadeOutTime, Time);
 }
 
 void FCubismMotion::StartFadeout(float NewFadeOutSeconds, float UserTimeSeconds)
 {
-	const float NewEndTimeSeconds = UserTimeSeconds + NewFadeOutSeconds;
+	const float NewEndTimeSeconds = UserTimeSeconds + FMath::Max(NewFadeOutSeconds, 0.0f);
 	bIsTriggeredFadeOut = true;
 
 	if (EndTimeSeconds < 0.0f || NewEndTimeSeconds < EndTimeSeconds)
@@ -110,9 +121,33 @@ float FCubismMotion::GetEndTime()
 void FCubismMotion::IsFinished(bool F)
 {
 	bFinished = F;
+
+	if (F)
+	{
+		State = ECubismMotionState::End;
+	}
 }
 
 bool FCubismMotion::IsFinished() const
 {
 	return bFinished;
+}
+
+float FCubismMotion::GetValue(const FString Id, const float Time) const
+{
+	const UCurveTable* Table = CurveTable.Get();
+
+	if (!Table)
+	{
+		return 0.0f;
+	}
+
+	const FRealCurve* Curve = Table->FindCurve(*Id, Id, false);
+
+	if (!Curve)
+	{
+		return 0.0f;
+	}
+
+	return Curve->Eval(Time, 0.0f);
 }

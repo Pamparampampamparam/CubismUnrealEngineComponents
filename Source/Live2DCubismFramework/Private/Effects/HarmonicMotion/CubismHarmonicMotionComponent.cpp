@@ -22,16 +22,26 @@ UCubismHarmonicMotionComponent::UCubismHarmonicMotionComponent()
 
 void UCubismHarmonicMotionComponent::Setup(UCubismModelComponent* InModel)
 {
-	check(InModel);
-
-	if (Model != InModel)
+	if (!InModel)
 	{
-		Model = InModel;
+		return;
+	}
+
+	if (!InModel->IsModelReady() && !InModel->EnsureModelBuilt())
+	{
+		return;
+	}
+
+	Model = InModel;
+
+	for (FCubismHarmonicMotionParameter& Parameter : Parameters)
+	{
+		Parameter.ElapsedTime = 0.0f;
 	}
 
 	if (Model->HarmonicMotion != this)
 	{
-		if (Model->HarmonicMotion)
+		if (IsValid(Model->HarmonicMotion))
 		{
 			Model->HarmonicMotion->DestroyComponent();
 		}
@@ -41,14 +51,14 @@ void UCubismHarmonicMotionComponent::Setup(UCubismModelComponent* InModel)
 	Model->AddTickPrerequisiteComponent(this); // model ticks after parameters are updated by components
 }
 
-TObjectPtr<UCubismModelComponent> UCubismHarmonicMotionComponent::GetModel() 
+bool UCubismHarmonicMotionComponent::HasValidModel() const
 {
-	if (TObjectPtr<UCubismModelComponent> ModelComp = Cast<UCubismModelComponent>(GetOwner()->FindComponentByClass<UCubismModelComponent>()))
-	{
-		return ModelComp;
-	}
+	return IsValid(Model) && Model->IsModelReady();
+}
 
-	return nullptr;
+TObjectPtr<UCubismModelComponent> UCubismHarmonicMotionComponent::GetModel()
+{
+	return UCubismModelComponent::FindModelComponent(this);
 }
 
 // UObject interface
@@ -78,9 +88,33 @@ void UCubismHarmonicMotionComponent::OnComponentCreated()
 	}
 }
 
+void UCubismHarmonicMotionComponent::OnComponentDestroyed(bool bDestroyingHierarchy)
+{
+	if (IsValid(Model) && Model->HarmonicMotion == this)
+	{
+		Model->HarmonicMotion = nullptr;
+	}
+
+	Super::OnComponentDestroyed(bDestroyingHierarchy);
+}
+
 void UCubismHarmonicMotionComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (!IsValid(Model))
+	{
+		// The model may have been created after this component (e.g. Blueprint construction order).
+		if (const TObjectPtr<UCubismModelComponent> ModelComp = GetModel())
+		{
+			Setup(ModelComp);
+		}
+	}
+
+	if (!HasValidModel())
+	{
+		return;
+	}
 
 	for (FCubismHarmonicMotionParameter& Parameter : Parameters)
 	{
@@ -96,8 +130,9 @@ void UCubismHarmonicMotionComponent::TickComponent(float DeltaTime, ELevelTick T
 			continue;
 		}
 
-		Time += DeltaTime * Parameter.TimeScale;
-		Parameter.Value = Parameter.CalcValue(Time, Destination->MinimumValue, Destination->MaximumValue);
+		// Each parameter keeps its own clock so that several parameters do not speed each other up.
+		Parameter.ElapsedTime += DeltaTime * Parameter.TimeScale;
+		Parameter.Value = Parameter.CalcValue(Parameter.ElapsedTime, Destination->MinimumValue, Destination->MaximumValue);
 
 		switch (Parameter.BlendMode)
 		{
