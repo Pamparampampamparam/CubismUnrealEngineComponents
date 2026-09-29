@@ -125,10 +125,12 @@ public:
 	 * @brief The function to play the motion.
 	 * @param Json The json asset that contains the motion information.
 	 * @param OffsetTime The delay time from the start of the motion to the start of the fade-in.
-	 * @param Priority The priority of the motion.
+	 * @param Priority The priority of the motion. A motion only replaces a playing motion of strictly lower priority:
+	 *        Idle never interrupts Normal, Normal does not interrupt another Normal, Force interrupts anything.
+	 * @return True if the motion was started, false if it was ignored because of its priority (or an invalid index).
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
-	void PlayMotion(const int32 InIndex, const float OffsetTime=0.0f, const ECubismMotionPriority Priority=ECubismMotionPriority::Normal);
+	bool PlayMotion(const int32 InIndex, const float OffsetTime=0.0f, const ECubismMotionPriority Priority=ECubismMotionPriority::Normal);
 
 	/**
 	 * @brief Plays the motion whose asset name matches `Name` (case-insensitive, the `_motion3` suffix is optional).

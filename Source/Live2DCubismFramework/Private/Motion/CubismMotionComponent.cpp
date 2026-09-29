@@ -95,13 +95,13 @@ bool UCubismMotionComponent::ReserveMotion(const ECubismMotionPriority Priority)
 	return true;
 }
 
-void UCubismMotionComponent::PlayMotion(const int32 InIndex, const float OffsetTime, const ECubismMotionPriority Priority)
+bool UCubismMotionComponent::PlayMotion(const int32 InIndex, const float OffsetTime, const ECubismMotionPriority Priority)
 {
 	if (!Jsons.IsValidIndex(InIndex))
 	{
 		UE_LOG(LogCubism, Warning, TEXT("Motion cannot be played. Index %d is out of range."), InIndex);
 
-		return;
+		return false;
 	}
 
 	const TObjectPtr<UCubismMotion3Json>& Json = Jsons[InIndex];
@@ -110,7 +110,21 @@ void UCubismMotionComponent::PlayMotion(const int32 InIndex, const float OffsetT
 	{
 		UE_LOG(LogCubism, Warning, TEXT("Motion cannot be played. The motion asset at index %d is not set."), InIndex);
 
-		return;
+		return false;
+	}
+
+	if (Priority != ECubismMotionPriority::Force)
+	{
+		// Same rule as the native framework's ReserveMotion: only a strictly higher priority replaces the current motion,
+		// unless the caller reserved this exact priority beforehand.
+		const bool bReservedForThis = ReservedPriority != ECubismMotionPriority::None && Priority == ReservedPriority;
+
+		if (!bReservedForThis && ((IsPlaying() && Priority <= CurrentPriority) || Priority < ReservedPriority))
+		{
+			UE_LOG(LogCubism, Verbose, TEXT("Motion %d ignored: priority %d does not exceed the current (%d) or reserved (%d) priority."), InIndex, (int32)Priority, (int32)CurrentPriority, (int32)ReservedPriority);
+
+			return false;
+		}
 	}
 
 	if (Priority == ReservedPriority || Priority == ECubismMotionPriority::Force)
@@ -131,6 +145,8 @@ void UCubismMotionComponent::PlayMotion(const int32 InIndex, const float OffsetT
 	TSharedPtr<FCubismMotion> NextMotion = MakeShared<FCubismMotion>(Json, OffsetTime);
 
 	MotionQueue.Add(NextMotion);
+
+	return true;
 }
 
 int32 UCubismMotionComponent::FindMotionIndex(const FString& Name) const
@@ -176,9 +192,7 @@ bool UCubismMotionComponent::PlayMotionByName(const FString& Name, const float O
 		return false;
 	}
 
-	PlayMotion(MotionIndex, OffsetTime, Priority);
-
-	return true;
+	return PlayMotion(MotionIndex, OffsetTime, Priority);
 }
 
 void UCubismMotionComponent::PlayIdleMotion()
