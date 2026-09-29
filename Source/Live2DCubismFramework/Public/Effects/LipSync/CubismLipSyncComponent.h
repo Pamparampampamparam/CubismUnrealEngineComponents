@@ -16,6 +16,8 @@
 
 class UCubismModel3Json;
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCubismLipSyncSourceFinishedHandler);
+
 /**
  * A component to apply the lip sync effect to the specified parameters of the Cubism model.
  */
@@ -74,6 +76,12 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
 	TObjectPtr<USoundWave> Source;
+
+	/**
+	 * Called when the source sound finished playing (e.g. to advance the dialogue after a voice line).
+	 */
+	UPROPERTY(BlueprintAssignable, Category = "Live2D Cubism")
+	FCubismLipSyncSourceFinishedHandler OnSourceFinished;
 
 public:
 	/**

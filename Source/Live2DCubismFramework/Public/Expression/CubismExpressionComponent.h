@@ -98,6 +98,20 @@ public:
 	void PlayExpression(const int32 InIndex);
 
 	/**
+	 * @brief Plays the expression whose asset name matches `Name` (case-insensitive, the `_exp3` suffix is optional).
+	 * @return True if an expression with that name exists.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	bool PlayExpressionByName(const FString& Name);
+
+	/**
+	 * @brief Finds the index of the expression whose asset name matches `Name` (case-insensitive, the `_exp3` suffix is optional).
+	 * @return The index, or -1 if there is no such expression.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	int32 FindExpressionIndex(const FString& Name) const;
+
+	/**
 	 * @brief The function to stop the expression motion.
 	 * @param bForce The flag to force to stop the expression motion.
 	 */

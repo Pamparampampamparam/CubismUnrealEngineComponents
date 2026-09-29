@@ -133,6 +133,69 @@ void UCubismMotionComponent::PlayMotion(const int32 InIndex, const float OffsetT
 	MotionQueue.Add(NextMotion);
 }
 
+int32 UCubismMotionComponent::FindMotionIndex(const FString& Name) const
+{
+	if (Name.IsEmpty())
+	{
+		return -1;
+	}
+
+	FString Wanted = Name;
+	Wanted.RemoveFromEnd(TEXT(".motion3.json"), ESearchCase::IgnoreCase);
+	Wanted.RemoveFromEnd(TEXT("_motion3"), ESearchCase::IgnoreCase);
+	Wanted.ReplaceInline(TEXT(" "), TEXT("_"));
+	Wanted.ReplaceInline(TEXT("."), TEXT("_"));
+
+	for (int32 MotionIndex = 0; MotionIndex < Jsons.Num(); MotionIndex++)
+	{
+		if (!Jsons[MotionIndex])
+		{
+			continue;
+		}
+
+		FString AssetName = Jsons[MotionIndex]->GetName();
+		AssetName.RemoveFromEnd(TEXT("_motion3"), ESearchCase::IgnoreCase);
+
+		if (AssetName.Equals(Wanted, ESearchCase::IgnoreCase))
+		{
+			return MotionIndex;
+		}
+	}
+
+	return -1;
+}
+
+bool UCubismMotionComponent::PlayMotionByName(const FString& Name, const float OffsetTime, const ECubismMotionPriority Priority)
+{
+	const int32 MotionIndex = FindMotionIndex(Name);
+
+	if (MotionIndex < 0)
+	{
+		UE_LOG(LogCubism, Warning, TEXT("Motion '%s' was not found on '%s'."), *Name, *GetName());
+
+		return false;
+	}
+
+	PlayMotion(MotionIndex, OffsetTime, Priority);
+
+	return true;
+}
+
+void UCubismMotionComponent::PlayIdleMotion()
+{
+	if (Jsons.Num() == 0)
+	{
+		return;
+	}
+
+	int32 PlayIndex = Jsons.IsValidIndex(IdleIndex) ? IdleIndex : (Jsons.IsValidIndex(Index) ? Index : 0);
+
+	if (Jsons[PlayIndex])
+	{
+		PlayMotion(PlayIndex, 0.0f, ECubismMotionPriority::Idle);
+	}
+}
+
 bool UCubismMotionComponent::IsPlaying() const
 {
 	return MotionQueue.Num() > 0;
@@ -357,6 +420,7 @@ void UCubismMotionComponent::OnCubismUpdate(float DeltaTime)
 	}
 
 	const bool bIsPlaying = MotionQueue.Num() > 0;
+	const ECubismMotionPriority FinishedPriority = CurrentPriority;
 
 	if (!bIsPlaying)
 	{
@@ -364,12 +428,21 @@ void UCubismMotionComponent::OnCubismUpdate(float DeltaTime)
 	}
 
 	// Only notify on the transition from playing to finished, not every idle frame.
-	if (bWasPlaying && !bIsPlaying)
+	// With bReturnToIdle the idle cycles are not reported, so the event means "the requested motion ended".
+	if (bWasPlaying && !bIsPlaying && !(bReturnToIdle && FinishedPriority == ECubismMotionPriority::Idle))
 	{
 		OnMotionPlaybackFinished.Broadcast();
 	}
 
 	bWasPlaying = bIsPlaying;
+
+	// Resume the idle motion once nothing is queued anymore (only while the game runs, not in the editor viewport).
+	if (!bIsPlaying && bReturnToIdle && HasBegunPlay())
+	{
+		PlayIdleMotion();
+
+		bWasPlaying = MotionQueue.Num() > 0;
+	}
 }
 // End of UActorComponent interface
 

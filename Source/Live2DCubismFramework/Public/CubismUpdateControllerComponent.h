@@ -25,6 +25,13 @@ public:
 	UCubismUpdateControllerComponent();
 
 	/**
+	 * If true, the Cubism components keep updating while the game is paused (menus, dialogs).
+	 * The drawables and masks never tick while paused, so with this on the model jumps ahead when the game resumes.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
+	bool bUpdateWhenPaused = false;
+
+	/**
 	 * @brief Finds the update controller on the actor that owns the given component.
 	 * @return The controller, or nullptr when the actor is not driven by one.
 	 */

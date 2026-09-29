@@ -14,7 +14,7 @@ UCubismUpdateControllerComponent::UCubismUpdateControllerComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.bStartWithTickEnabled = true;
-	PrimaryComponentTick.bTickEvenWhenPaused = true;
+	PrimaryComponentTick.bTickEvenWhenPaused = bUpdateWhenPaused;
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
 
 #if WITH_EDITOR
@@ -57,6 +57,8 @@ void UCubismUpdateControllerComponent::OnComponentCreated()
 void UCubismUpdateControllerComponent::OnRegister()
 {
 	Super::OnRegister();
+
+	PrimaryComponentTick.bTickEvenWhenPaused = bUpdateWhenPaused;
 
 	bRefreshRequested = true;
 }

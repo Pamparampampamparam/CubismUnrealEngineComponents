@@ -96,6 +96,54 @@ void UCubismExpressionComponent::PlayExpression(const int32 InIndex)
 	ExpressionQueue.Add(NextExpression);
 }
 
+int32 UCubismExpressionComponent::FindExpressionIndex(const FString& Name) const
+{
+	if (Name.IsEmpty())
+	{
+		return -1;
+	}
+
+	FString Wanted = Name;
+	Wanted.RemoveFromEnd(TEXT(".exp3.json"), ESearchCase::IgnoreCase);
+	Wanted.RemoveFromEnd(TEXT("_exp3"), ESearchCase::IgnoreCase);
+	Wanted.ReplaceInline(TEXT(" "), TEXT("_"));
+	Wanted.ReplaceInline(TEXT("."), TEXT("_"));
+
+	for (int32 ExpressionIndex = 0; ExpressionIndex < Jsons.Num(); ExpressionIndex++)
+	{
+		if (!Jsons[ExpressionIndex])
+		{
+			continue;
+		}
+
+		FString AssetName = Jsons[ExpressionIndex]->GetName();
+		AssetName.RemoveFromEnd(TEXT("_exp3"), ESearchCase::IgnoreCase);
+
+		if (AssetName.Equals(Wanted, ESearchCase::IgnoreCase))
+		{
+			return ExpressionIndex;
+		}
+	}
+
+	return -1;
+}
+
+bool UCubismExpressionComponent::PlayExpressionByName(const FString& Name)
+{
+	const int32 ExpressionIndex = FindExpressionIndex(Name);
+
+	if (ExpressionIndex < 0)
+	{
+		UE_LOG(LogCubism, Warning, TEXT("Expression '%s' was not found on '%s'."), *Name, *GetName());
+
+		return false;
+	}
+
+	PlayExpression(ExpressionIndex);
+
+	return true;
+}
+
 void UCubismExpressionComponent::StopAllExpressions(const bool bForce)
 {
 	if (bForce)

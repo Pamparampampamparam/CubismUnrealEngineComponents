@@ -12,6 +12,9 @@
 #include "Effects/LipSync/CubismLipSyncComponent.h"
 #include "Effects/Raycast/CubismRaycastComponent.h"
 #include "Effects/Raycast/CubismRaycastParameter.h"
+#include "Effects/LookAt/CubismLookAtComponent.h"
+#include "Effects/LookAt/CubismLookAtParameter.h"
+#include "Sound/SoundWave.h"
 #include "Physics/CubismPhysicsComponent.h"
 #include "Pose/CubismPoseComponent.h"
 #include "Expression/CubismExpressionComponent.h"
@@ -47,6 +50,9 @@ void ACubismModel::Initialize(UCubismModel3Json* Model3Json)
 		Model3Json->CollectReferencedAssets();
 	}
 #endif
+
+	ModelAsset = Model3Json;
+	InitializedAsset = Model3Json;
 
 	// Model Component
 	if (!IsValid(Model))
@@ -164,6 +170,350 @@ void ACubismModel::Initialize(UCubismModel3Json* Model3Json)
 			AddInstanceComponent(Raycast);
 		}
 	}
+}
+
+// ---- AActor interface ------------------------------------------------------------------------------------
+
+void ACubismModel::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+
+	if (IsTemplate())
+	{
+		return;
+	}
+
+	// A Blueprint child with `Model Asset` set in its defaults builds itself when placed, spawned or edited.
+	if (ModelAsset && (!IsValid(Model) || InitializedAsset != ModelAsset))
+	{
+		Initialize(ModelAsset);
+	}
+}
+
+// ---- Component access -------------------------------------------------------------------------------------
+
+UCubismModelComponent* ACubismModel::GetModelComponent() const
+{
+	return IsValid(Model) ? Model.Get() : nullptr;
+}
+
+UCubismMotionComponent* ACubismModel::GetMotionComponent() const
+{
+	return IsValid(Model) && IsValid(Model->Motion) ? Model->Motion.Get() : nullptr;
+}
+
+UCubismExpressionComponent* ACubismModel::GetExpressionComponent() const
+{
+	return IsValid(Model) && IsValid(Model->Expression) ? Model->Expression.Get() : nullptr;
+}
+
+UCubismLipSyncComponent* ACubismModel::GetLipSyncComponent() const
+{
+	return IsValid(Model) && IsValid(Model->LipSync) ? Model->LipSync.Get() : nullptr;
+}
+
+UCubismEyeBlinkComponent* ACubismModel::GetEyeBlinkComponent() const
+{
+	return IsValid(Model) && IsValid(Model->EyeBlink) ? Model->EyeBlink.Get() : nullptr;
+}
+
+UCubismLookAtComponent* ACubismModel::GetLookAtComponent() const
+{
+	return IsValid(Model) && IsValid(Model->LookAt) ? Model->LookAt.Get() : nullptr;
+}
+
+UCubismPhysicsComponent* ACubismModel::GetPhysicsComponent() const
+{
+	return IsValid(Model) && IsValid(Model->Physics) ? Model->Physics.Get() : nullptr;
+}
+
+UCubismPoseComponent* ACubismModel::GetPoseComponent() const
+{
+	return IsValid(Model) && IsValid(Model->Pose) ? Model->Pose.Get() : nullptr;
+}
+
+UCubismRendererComponent* ACubismModel::GetRendererComponent() const
+{
+	return IsValid(Model) && IsValid(Model->Renderer) ? Model->Renderer.Get() : nullptr;
+}
+
+UCubismRaycastComponent* ACubismModel::GetRaycastComponent() const
+{
+	return IsValid(Model) && IsValid(Model->Raycast) ? Model->Raycast.Get() : nullptr;
+}
+
+// ---- Character control -------------------------------------------------------------------------------------
+
+static FString CubismStripAssetSuffix(const UObject* Asset, const TCHAR* Suffix)
+{
+	if (!Asset)
+	{
+		return FString();
+	}
+
+	FString Name = Asset->GetName();
+	Name.RemoveFromEnd(Suffix, ESearchCase::IgnoreCase);
+
+	return Name;
+}
+
+TArray<FString> ACubismModel::GetMotionNames() const
+{
+	TArray<FString> Names;
+
+	if (const UCubismMotionComponent* Motion = GetMotionComponent())
+	{
+		for (const TObjectPtr<UCubismMotion3Json>& Json : Motion->Jsons)
+		{
+			Names.Add(CubismStripAssetSuffix(Json, TEXT("_motion3")));
+		}
+	}
+
+	return Names;
+}
+
+TArray<FString> ACubismModel::GetExpressionNames() const
+{
+	TArray<FString> Names;
+
+	if (const UCubismExpressionComponent* Expression = GetExpressionComponent())
+	{
+		for (const TObjectPtr<UCubismExp3Json>& Json : Expression->Jsons)
+		{
+			Names.Add(CubismStripAssetSuffix(Json, TEXT("_exp3")));
+		}
+	}
+
+	return Names;
+}
+
+bool ACubismModel::PlayMotionByName(const FString& Name, const ECubismMotionPriority Priority)
+{
+	UCubismMotionComponent* Motion = GetMotionComponent();
+
+	if (!Motion)
+	{
+		UE_LOG(LogCubism, Warning, TEXT("%s has no motion component (the model asset has no motions)."), *GetName());
+		return false;
+	}
+
+	return Motion->PlayMotionByName(Name, 0.0f, Priority);
+}
+
+bool ACubismModel::PlayExpressionByName(const FString& Name)
+{
+	UCubismExpressionComponent* Expression = GetExpressionComponent();
+
+	if (!Expression)
+	{
+		UE_LOG(LogCubism, Warning, TEXT("%s has no expression component (the model asset has no expressions)."), *GetName());
+		return false;
+	}
+
+	return Expression->PlayExpressionByName(Name);
+}
+
+UCubismLipSyncComponent* ACubismModel::FindOrCreateLipSync()
+{
+	if (UCubismLipSyncComponent* Existing = GetLipSyncComponent())
+	{
+		return Existing;
+	}
+
+	if (!IsValid(Model))
+	{
+		return nullptr;
+	}
+
+	UCubismLipSyncComponent* LipSync = NewObject<UCubismLipSyncComponent>(Model, TEXT("CubismLipSync"), RF_Transactional);
+
+	LipSync->Json = ModelAsset;
+
+	LipSync->RegisterComponent();
+	AddInstanceComponent(LipSync);
+
+	if (LipSync->Ids.Num() == 0)
+	{
+		// The model asset did not declare lip sync parameters; the standard mouth parameter is the sensible default.
+		LipSync->Ids.Add(TEXT("ParamMouthOpenY"));
+	}
+
+	return LipSync;
+}
+
+void ACubismModel::Speak(USoundWave* VoiceLine)
+{
+	UCubismLipSyncComponent* LipSync = FindOrCreateLipSync();
+
+	if (!LipSync)
+	{
+		return;
+	}
+
+	LipSync->bAutoEnabled = false;
+	LipSync->SetSource(VoiceLine, true);
+}
+
+void ACubismModel::StopSpeaking()
+{
+	if (UCubismLipSyncComponent* LipSync = GetLipSyncComponent())
+	{
+		LipSync->Stop();
+	}
+}
+
+void ACubismModel::SetAutoLipSync(const bool bEnabled)
+{
+	UCubismLipSyncComponent* LipSync = FindOrCreateLipSync();
+
+	if (!LipSync)
+	{
+		return;
+	}
+
+	if (bEnabled)
+	{
+		LipSync->Stop();
+	}
+
+	LipSync->bAutoEnabled = bEnabled;
+}
+
+void ACubismModel::SetOpacity(const float Opacity)
+{
+	if (IsValid(Model))
+	{
+		Model->Opacity = FMath::Clamp(Opacity, 0.0f, 1.0f);
+	}
+}
+
+void ACubismModel::SetDimmed(const bool bDimmed, const FLinearColor DimColor)
+{
+	if (!IsValid(Model))
+	{
+		return;
+	}
+
+	Model->bOverwriteFlagForModelMultiplyColors = bDimmed;
+	Model->MultiplyColor = bDimmed ? DimColor : FLinearColor::White;
+}
+
+void ACubismModel::SetRenderOrder(const int32 RenderOrder)
+{
+	if (UCubismRendererComponent* Renderer = GetRendererComponent())
+	{
+		Renderer->SetRenderOrder(RenderOrder);
+	}
+}
+
+void ACubismModel::SetLookAtTarget(AActor* Target)
+{
+	if (!IsValid(Model))
+	{
+		return;
+	}
+
+	UCubismLookAtComponent* LookAt = GetLookAtComponent();
+
+	if (!LookAt)
+	{
+		if (!Target)
+		{
+			return;
+		}
+
+		LookAt = NewObject<UCubismLookAtComponent>(Model, TEXT("CubismLookAt"), RF_Transactional);
+
+		// The look-at component measures the target offset in model units (canvas pixels): X is horizontal, Y vertical.
+		// Scale the standard Cubism parameters so that a target at the edge of the canvas turns them fully.
+		const FVector2D CanvasSize = Model->IsModelReady() ? Model->GetCanvasSize() : FVector2D(2000.0f, 2000.0f);
+		const float HalfWidth = FMath::Max(CanvasSize.X * 0.5f, 1.0f);
+		const float HalfHeight = FMath::Max(CanvasSize.Y * 0.5f, 1.0f);
+
+		struct FDefaultLookAt { const TCHAR* Id; ECubismLookAtAxis Axis; float Factor; };
+		const FDefaultLookAt Defaults[] =
+		{
+			{ TEXT("ParamAngleX"),     ECubismLookAtAxis::X, 30.0f / HalfWidth },
+			{ TEXT("ParamAngleY"),     ECubismLookAtAxis::Y, 30.0f / HalfHeight },
+			{ TEXT("ParamEyeBallX"),   ECubismLookAtAxis::X,  1.0f / HalfWidth },
+			{ TEXT("ParamEyeBallY"),   ECubismLookAtAxis::Y,  1.0f / HalfHeight },
+			{ TEXT("ParamBodyAngleX"), ECubismLookAtAxis::X, 10.0f / HalfWidth },
+		};
+
+		for (const FDefaultLookAt& Default : Defaults)
+		{
+			FCubismLookAtParameter Parameter;
+			Parameter.bEnabled = true;
+			Parameter.Id = Default.Id;
+			Parameter.Axis = Default.Axis;
+			Parameter.Factor = Default.Factor;
+
+			LookAt->Parameters.Add(Parameter);
+		}
+
+		LookAt->RegisterComponent();
+		AddInstanceComponent(LookAt);
+	}
+
+	LookAt->Target = Target;
+}
+
+// ---- Editor testing ----------------------------------------------------------------------------------------
+
+void ACubismModel::TestPlayMotion()
+{
+#if WITH_EDITORONLY_DATA
+	if (!PlayMotionByName(TestMotionName, ECubismMotionPriority::Force))
+	{
+		TestListNames();
+	}
+#endif
+}
+
+void ACubismModel::TestPlayExpression()
+{
+#if WITH_EDITORONLY_DATA
+	if (!PlayExpressionByName(TestExpressionName))
+	{
+		TestListNames();
+	}
+#endif
+}
+
+void ACubismModel::TestSpeak()
+{
+#if WITH_EDITORONLY_DATA
+	if (TestVoiceLine)
+	{
+		Speak(TestVoiceLine);
+	}
+	else
+	{
+		SetAutoLipSync(true);
+	}
+#endif
+}
+
+void ACubismModel::TestStop()
+{
+	StopSpeaking();
+	SetAutoLipSync(false);
+
+	if (UCubismMotionComponent* Motion = GetMotionComponent())
+	{
+		Motion->StopAllMotions();
+	}
+
+	if (UCubismExpressionComponent* Expression = GetExpressionComponent())
+	{
+		Expression->StopAllExpressions();
+	}
+}
+
+void ACubismModel::TestListNames()
+{
+	UE_LOG(LogCubism, Display, TEXT("%s motions: %s"), *GetName(), *FString::Join(GetMotionNames(), TEXT(", ")));
+	UE_LOG(LogCubism, Display, TEXT("%s expressions: %s"), *GetName(), *FString::Join(GetExpressionNames(), TEXT(", ")));
 }
 
 TObjectPtr<UCubismMoc3> ACubismModel::LoadMoc(const TObjectPtr<UCubismModel3Json>& Model3Json)

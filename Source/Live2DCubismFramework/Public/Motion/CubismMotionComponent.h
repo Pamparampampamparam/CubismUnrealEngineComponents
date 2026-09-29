@@ -79,6 +79,19 @@ public:
 	bool bAutoPlay = true;
 
 	/**
+	 * If true, the idle motion is played again whenever the queue runs empty (e.g. after a talk motion finished),
+	 * so the character never freezes in the last pose of a one-shot motion.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism")
+	bool bReturnToIdle = true;
+
+	/**
+	 * The motion used as idle by `bReturnToIdle`. -1 uses `Index` (or the first motion if `Index` is invalid).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Live2D Cubism", meta = (ClampMin = "-1", SliderMin = "-1"))
+	int32 IdleIndex = -1;
+
+	/**
 	 * The delegate to be called when the motion playback is finished.
 	 */
 	UPROPERTY(BlueprintAssignable, Category = "Live2D Cubism")
@@ -116,6 +129,26 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
 	void PlayMotion(const int32 InIndex, const float OffsetTime=0.0f, const ECubismMotionPriority Priority=ECubismMotionPriority::Normal);
+
+	/**
+	 * @brief Plays the motion whose asset name matches `Name` (case-insensitive, the `_motion3` suffix is optional).
+	 * @return True if a motion with that name exists.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	bool PlayMotionByName(const FString& Name, const float OffsetTime=0.0f, const ECubismMotionPriority Priority=ECubismMotionPriority::Normal);
+
+	/**
+	 * @brief Finds the index of the motion whose asset name matches `Name` (case-insensitive, the `_motion3` suffix is optional).
+	 * @return The index, or -1 if there is no such motion.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	int32 FindMotionIndex(const FString& Name) const;
+
+	/**
+	 * @brief Plays the idle motion (see `IdleIndex`) with idle priority.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Live2D Cubism")
+	void PlayIdleMotion();
 
 	/**
 	 * @brief The function to stop the motion.

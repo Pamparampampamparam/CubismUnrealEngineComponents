@@ -100,6 +100,8 @@ void UCubismLipSyncComponent::OnAudioFinished()
 {
 	// No more envelope values will arrive; close the mouth instead of freezing on the last value.
 	TargetValue = 0.0f;
+
+	OnSourceFinished.Broadcast();
 }
 
 void UCubismLipSyncComponent::SetSource(USoundWave* InSource, const bool bPlayImmediately)
